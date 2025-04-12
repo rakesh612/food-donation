@@ -237,4 +237,26 @@ const Navbar = () => {
                     strokeLinecap: 'round',
                     strokeLinejoin: 'round',
                     strokeWidth: '2',
-    
+                    d: 'M4 6h16M4 12h16M4 18h16'
+                  })
+            )
+          )
+        )
+      ),
+
+      // Mobile Menu
+      isMenuOpen &&
+        React.createElement(
+          'div',
+          { className: 'md:hidden py-4 border-t border-gray-200' },
+          React.createElement(
+            'div',
+            { className: 'flex flex-col space-y-4' },
+            ...createMobileNav()
+          )
+        )
+    )
+  );
+};
+
+export default Navbar;
