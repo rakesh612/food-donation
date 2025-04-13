@@ -13,13 +13,12 @@
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React.js, HTML5, CSS3, JavaScript
+- **Frontend**: React.js, Tailwind CSS, JavaScript
 - **Backend**: Node.js, Express.js
 - **Database**: MongoDB
 - **Authentication**: JSON Web Tokens (JWT)
 - **Real-Time Communication**: Socket.IO
 - **AI & Geolocation**: TensorFlow.js, Google Maps API
-- **Deployment**: Netlify (Frontend), Heroku (Backend)
 
 ## 🚀 Installation & Setup
 
@@ -61,5 +60,19 @@ Contributions are welcome! Please fork the repository and submit a pull request 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+<h2><strong>Output Images</strong></h2>
+
+
+![WhatsApp Image 2025-04-13 at 07 09 27_ff3be354](https://github.com/user-attachments/assets/e667f4b8-8654-4bd8-8667-9ce92ea34f4d)
+![WhatsApp Image 2025-04-13 at 07 10 45_d415de99](https://github.com/user-attachments/assets/b52dd3a0-2f20-4865-9688-f56b61de4e3a)
+![WhatsApp Image 2025-04-13 at 07 16 04_35c6867c](https://github.com/user-attachments/assets/ed8643ac-88b0-4273-879a-d5cbe6f09855)
+![WhatsApp Image 2025-04-13 at 07 16 55_171c74ba](https://github.com/user-attachments/assets/4f3ad9d7-1407-426f-b73c-24c4e78097d4)
+![WhatsApp Image 2025-04-13 at 07 17 53_7135f294](https://github.com/user-attachments/assets/2651fec4-92c4-463c-88cf-23af0b7662c7)
+
+
+
+
+
 
  
