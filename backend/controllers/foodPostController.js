@@ -45,8 +45,16 @@ const createFoodPost = async (req, res) => {
         createdAt: foodPost.createdAt
       };
 
+      console.log('Emitting new-food-post-available event:', foodPostData);
       io.to('receiver').emit('new-food-post-available', foodPostData);
       io.to('admin').emit('new-food-post-created', foodPostData);
+
+      // Also broadcast to all connected clients for better visibility
+      console.log('Broadcasting food post to all clients');
+      io.emit('broadcast-food-post', {
+        message: 'New food donation available',
+        data: foodPostData
+      });
     }
 
     res.status(201).json({ message: 'Food post created', foodPost });
@@ -71,8 +79,8 @@ const getNearbyFoodPosts = async (req, res) => {
       return res.status(400).json({ message: 'Invalid coordinates' });
     }
 
-    // Find all pending food posts within the maxDistance
-    const nearbyPosts = await FoodPost.find({
+    // Find food posts within the specified distance using MongoDB's $near operator
+    const foodPosts = await FoodPost.find({
       status: 'pending',
       location: {
         $near: {
@@ -85,20 +93,19 @@ const getNearbyFoodPosts = async (req, res) => {
       }
     })
     .populate('donorId', 'name email phone')
-    .sort({ createdAt: -1 }); // Sort by newest first
-
-    console.log(`Found ${nearbyPosts.length} nearby posts within ${maxDistance}m`);
+    .sort({ createdAt: -1 });
 
     // Add distance to each post
-    const postsWithDistance = nearbyPosts.map(post => {
+    const postsWithDistance = foodPosts.map(post => {
       const postObj = post.toObject();
-      postObj.distance = post.location.coordinates ? 
-        calculateDistance(
+      if (post.location && post.location.coordinates) {
+        postObj.distance = calculateDistance(
           parsedLat,
           parsedLng,
           post.location.coordinates[1],
           post.location.coordinates[0]
-        ) : null;
+        );
+      }
       return postObj;
     });
 
@@ -227,4 +234,175 @@ const confirmPickup = async (req, res) => {
       io.to(`user:${foodPost.donorId}`).emit('donation-picked', updateData);
 
       // Notify all users in the food post room
-      io.to(`
+      io.to(`food-post:${postId}`).emit('food-post-status-changed', updateData);
+
+      // Notify admins
+      io.to('admin').emit('food-post-status-changed', updateData);
+    }
+
+    res.json({ message: 'Food post marked as picked up', foodPost });
+  } catch (error) {
+    console.error('Error in confirmFoodPost:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Verify Delivery (Admin)
+const verifyDelivery = async (req, res) => {
+  const { postId } = req.params;
+
+  try {
+    const foodPost = await FoodPost.findById(postId);
+    if (!foodPost || foodPost.status !== 'picked') {
+      return res.status(400).json({ message: 'Food post not in picked status' });
+    }
+
+    foodPost.status = 'verified';
+    foodPost.pickupDetails.verifiedAt = Date.now();
+    await foodPost.save();
+
+    // Get Socket.IO instance
+    const io = req.app.get('io');
+
+    // Emit real-time event to donor and receiver
+    if (io) {
+      const updateData = {
+        postId: foodPost._id,
+        status: foodPost.status,
+        updatedAt: foodPost.updatedAt,
+        statusHistory: foodPost.statusHistory
+      };
+
+      // Notify donor
+      io.to(`user:${foodPost.donorId}`).emit('donation-verified', updateData);
+
+      // Notify receiver
+      io.to(`user:${foodPost.receiverId}`).emit('pickup-verified', updateData);
+
+      // Notify all users in the food post room
+      io.to(`food-post:${postId}`).emit('food-post-status-changed', updateData);
+    }
+
+    res.json({ message: 'Food post verified', foodPost });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Get Donor Food Posts
+const getDonorFoodPosts = async (req, res) => {
+  try {
+    const foodPosts = await FoodPost.find({ donorId: req.user._id })
+      .sort({ createdAt: -1 });
+    res.json(foodPosts);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Update Food Post Fields
+const updateFoodPostFields = async (req, res) => {
+  const { postId } = req.params;
+  const { foodType, category, expiryWindow, pickupDeadline, notes } = req.body;
+
+  try {
+    const foodPost = await FoodPost.findById(postId);
+    if (!foodPost || foodPost.donorId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    if (foodType) foodPost.foodType = foodType;
+    if (category) foodPost.category = category;
+    if (expiryWindow) foodPost.expiryWindow = new Date(expiryWindow);
+    if (pickupDeadline) foodPost.pickupDeadline = new Date(pickupDeadline);
+    if (notes !== undefined) foodPost.notes = notes;
+
+    await foodPost.save();
+
+    // Get Socket.IO instance
+    const io = req.app.get('io');
+
+    // Emit real-time event to receiver if assigned
+    if (io && foodPost.receiverId) {
+      const updateData = {
+        postId: foodPost._id,
+        foodType: foodPost.foodType,
+        category: foodPost.category,
+        expiryWindow: foodPost.expiryWindow,
+        pickupDeadline: foodPost.pickupDeadline,
+        notes: foodPost.notes,
+        updatedAt: foodPost.updatedAt
+      };
+
+      // Notify receiver
+      io.to(`user:${foodPost.receiverId}`).emit('pickup-fields-updated', updateData);
+
+      // Notify all users in the food post room
+      io.to(`food-post:${postId}`).emit('food-post-fields-changed', updateData);
+    }
+
+    res.json({ message: 'Food post updated', foodPost });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Update Food Post Status
+const updateFoodPostStatus = async (req, res) => {
+  const { postId } = req.params;
+  const { status } = req.body;
+
+  try {
+    const foodPost = await FoodPost.findById(postId);
+    if (!foodPost) {
+      return res.status(404).json({ message: 'Food post not found' });
+    }
+
+    // Only admin can change status directly
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    foodPost.status = status;
+    await foodPost.save();
+
+    // Get Socket.IO instance
+    const io = req.app.get('io');
+
+    // Emit real-time event to donor and receiver
+    if (io) {
+      const updateData = {
+        postId: foodPost._id,
+        status: foodPost.status,
+        updatedAt: foodPost.updatedAt,
+        statusHistory: foodPost.statusHistory
+      };
+
+      // Notify donor
+      io.to(`user:${foodPost.donorId}`).emit('food-post-status-changed', updateData);
+
+      // Notify receiver if assigned
+      if (foodPost.receiverId) {
+        io.to(`user:${foodPost.receiverId}`).emit('food-post-status-changed', updateData);
+      }
+
+      // Notify all users in the food post room
+      io.to(`food-post:${postId}`).emit('food-post-status-changed', updateData);
+    }
+
+    res.json({ message: 'Food post status updated', foodPost });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+export {
+  createFoodPost,
+  getNearbyFoodPosts,
+  acceptFoodPost,
+  confirmPickup,
+  verifyDelivery,
+  getDonorFoodPosts,
+  updateFoodPostFields,
+  updateFoodPostStatus
+};

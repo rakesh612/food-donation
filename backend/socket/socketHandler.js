@@ -6,36 +6,97 @@ import jwt from 'jsonwebtoken';
 const connectedUsers = new Map();
 
 const setupSocketIO = (io) => {
-  // Middleware for authentication
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
+  // Add connection timeout handling
+  io.engine.on("connection_error", (err) => {
+    console.error('Socket.IO connection error:', {
+      type: err.type,
+      message: err.message,
+      context: err.context
+    });
+  });
 
-    if (!token) {
-      return next(new Error('Authentication error: Token missing'));
+  // Add middleware for rate limiting
+  io.use((socket, next) => {
+    const clientId = socket.handshake.auth.token || socket.handshake.address;
+    const now = Date.now();
+    const windowMs = 60000; // 1 minute
+    const maxRequests = 100; // Maximum requests per minute
+
+    if (!socket.rateLimit) {
+      socket.rateLimit = {
+        requests: [],
+        windowMs
+      };
     }
 
+    // Clean up old requests
+    socket.rateLimit.requests = socket.rateLimit.requests.filter(
+      time => now - time < windowMs
+    );
+
+    if (socket.rateLimit.requests.length >= maxRequests) {
+      return next(new Error('Rate limit exceeded'));
+    }
+
+    socket.rateLimit.requests.push(now);
+    next();
+  });
+
+  // Add middleware for authentication
+  io.use(async (socket, next) => {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
-      socket.userId = decoded.id;
-      socket.userRole = decoded.role;
+      const token = socket.handshake.auth.token;
+      if (!token) {
+        return next(new Error('Authentication token missing'));
+      }
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id).select('-password');
+      
+      if (!user) {
+        return next(new Error('User not found'));
+      }
+
+      socket.user = user;
       next();
     } catch (error) {
-      return next(new Error('Authentication error: Invalid token'));
+      next(new Error('Authentication failed'));
     }
   });
 
   io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.userId}, Role: ${socket.userRole}`);
+    console.log(`User connected: ${socket.user._id}`);
+
+    // Add error handling for the socket
+    socket.on('error', (error) => {
+      console.error(`Socket error for user ${socket.user._id}:`, error);
+      socket.emit('error', { message: 'An error occurred' });
+    });
+
+    // Add reconnection handling
+    socket.on('reconnect_attempt', (attemptNumber) => {
+      console.log(`User ${socket.user._id} attempting to reconnect (attempt ${attemptNumber})`);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log(`User ${socket.user._id} reconnected after ${attemptNumber} attempts`);
+      // Rejoin rooms and restore state
+      if (socket.user.role === 'donor') {
+        socket.join(`donor:${socket.user._id}`);
+      } else if (socket.user.role === 'receiver') {
+        socket.join(`receiver:${socket.user._id}`);
+      }
+    });
 
     // Add user to connected users map
-    connectedUsers.set(socket.userId, socket);
+    connectedUsers.set(socket.user._id, socket);
 
     // Join room based on role
-    socket.join(socket.userRole);
-    socket.join(`user:${socket.userId}`);
+    socket.join(socket.user.role);
+    socket.join(`user:${socket.user._id}`);
 
     // If admin, join admin room
-    if (socket.userRole === 'admin') {
+    if (socket.user.role === 'admin') {
       socket.join('admin');
     }
 
@@ -45,7 +106,7 @@ const setupSocketIO = (io) => {
         const foodPost = await FoodPost.findById(postId);
         if (foodPost) {
           socket.join(`food-post:${postId}`);
-          console.log(`User ${socket.userId} joined food-post:${postId}`);
+          console.log(`User ${socket.user._id} joined food-post:${postId}`);
         }
       } catch (error) {
         console.error('Error joining food post room:', error);
@@ -60,7 +121,7 @@ const setupSocketIO = (io) => {
         io.to(`food-post:${postId}`).emit('location-updated', {
           postId,
           location,
-          userId: socket.userId
+          userId: socket.user._id
         });
       } catch (error) {
         console.error('Error updating location:', error);
@@ -130,7 +191,7 @@ const setupSocketIO = (io) => {
         }
 
         // Check if user is the donor of this post
-        if (foodPost.donorId.toString() !== socket.userId) {
+        if (foodPost.donorId.toString() !== socket.user._id) {
           socket.emit('error', { message: 'Not authorized to update this food post' });
           return;
         }
@@ -179,8 +240,6 @@ const setupSocketIO = (io) => {
       }
     });
 
-
-
     // Handle new food post creation
     socket.on('new-food-post', async (postData) => {
       try {
@@ -227,7 +286,7 @@ const setupSocketIO = (io) => {
     // Handle user verification requests
     socket.on('verify-user', async (userId) => {
       try {
-        if (socket.userRole !== 'admin') {
+        if (socket.user.role !== 'admin') {
           socket.emit('error', { message: 'Unauthorized: Only admins can verify users' });
           return;
         }
@@ -268,7 +327,7 @@ const setupSocketIO = (io) => {
     socket.on('new-food-post', async (data) => {
       try {
         // Get user name for notifications
-        const user = await User.findById(socket.userId);
+        const user = await User.findById(socket.user._id);
         const userName = user ? user.name : 'Unknown User';
 
         // Prepare notification data
@@ -301,12 +360,20 @@ const setupSocketIO = (io) => {
       }
     });
 
-    // Handle disconnect
-    socket.on('disconnect', () => {
-      console.log(`User disconnected: ${socket.userId}`);
-      connectedUsers.delete(socket.userId);
+    // Add cleanup on disconnect
+    socket.on('disconnect', (reason) => {
+      console.log(`User disconnected: ${socket.user._id}, reason: ${reason}`);
+      // Clean up any resources or state
+      connectedUsers.delete(socket.user._id);
     });
   });
+
+  // Add global error handling
+  io.on('error', (error) => {
+    console.error('Socket.IO server error:', error);
+  });
+
+  return io;
 };
 
 export default setupSocketIO;

@@ -1,5 +1,5 @@
 import express from 'express';
-import { createFoodPost, getNearbyFoodPosts, acceptFoodPost, confirmPickup, verifyDelivery } from '../controllers/foodPostController.js';
+import { createFoodPost, getNearbyFoodPosts, acceptFoodPost, confirmPickup, verifyDelivery, getDonorFoodPosts, updateFoodPostFields, updateFoodPostStatus } from '../controllers/foodPostController.js';
 import { protect, restrictTo } from '../middleware/authMiddleware.js';
 import FoodPost from '../models/FoodPost.js';
 
@@ -7,37 +7,11 @@ const router = express.Router();
 
 // Donor routes
 router.post('/', protect, restrictTo('donor'), createFoodPost);
-router.get('/', protect, (req, res, next) => {
-  // If donorId is provided, filter by donor
-  if (req.query.donorId) {
-    return getFoodPostsByDonor(req, res, next);
-  }
-  // Otherwise, get all food posts (admin only)
-  if (req.user.role === 'admin') {
-    return getAllFoodPosts(req, res, next);
-  }
-  return res.status(403).json({ message: 'Not authorized' });
-});
+// Get donor's own food posts
+router.get('/donor', protect, restrictTo('donor'), getDonorFoodPosts);
 
-// Receiver routes
-router.get('/nearby', protect, restrictTo('receiver'), getNearbyFoodPosts);
-router.put('/accept/:postId', protect, restrictTo('receiver'), acceptFoodPost);
-router.put('/confirm/:postId', protect, restrictTo('receiver'), confirmPickup);
-
-// Admin routes
-router.put('/verify/:postId', protect, restrictTo('admin'), verifyDelivery);
-
-// Helper functions
-const getFoodPostsByDonor = async (req, res) => {
-  try {
-    const foodPosts = await FoodPost.find({ donorId: req.query.donorId });
-    res.json(foodPosts);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-};
-
-const getAllFoodPosts = async (req, res) => {
+// Get all food posts (admin only)
+router.get('/', protect, restrictTo('admin'), async (req, res) => {
   try {
     const foodPosts = await FoodPost.find()
       .populate('donorId', 'name email')
@@ -46,7 +20,19 @@ const getAllFoodPosts = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
-};
+});
+
+// Receiver routes
+router.get('/nearby', protect, restrictTo('receiver'), getNearbyFoodPosts);
+router.put('/accept/:postId', protect, restrictTo('receiver'), acceptFoodPost);
+router.put('/confirm/:postId', protect, restrictTo('receiver'), confirmPickup);
+
+// Update food post fields (donor only)
+router.put('/update/:postId', protect, restrictTo('donor'), updateFoodPostFields);
+
+// Admin routes
+router.put('/verify/:postId', protect, restrictTo('admin'), verifyDelivery);
+router.put('/status/:postId', protect, restrictTo('admin'), updateFoodPostStatus);
 
 // Get flagged or expired posts (admin only)
 router.get('/flagged', protect, restrictTo('admin'), async (req, res) => {

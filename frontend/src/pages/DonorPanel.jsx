@@ -110,9 +110,9 @@ const DonorPanel = () => {
     try {
       const token = localStorage.getItem('accessToken');
       if (!token) throw new Error('No access token found');
-      const res = await axios.get('http://localhost:5002/api/food-posts', {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { donorId: user.id },
+      const res = await axios.get('http://localhost:5002/api/food-posts/donor', {
+        headers: { Authorization: `Bearer ${token}` }
+        // No need to pass donorId as the endpoint already filters by the authenticated user
       });
       setDonations(
         res.data.map((post) => ({

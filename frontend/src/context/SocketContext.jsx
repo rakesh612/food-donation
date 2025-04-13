@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { AuthContext } from './AuthContext';
 import { toast } from 'react-hot-toast';
+import axios from 'axios';
 
 export const SocketContext = createContext();
 
@@ -10,78 +11,143 @@ export const SocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const { user } = useContext(AuthContext);
+  const [socketUrl, setSocketUrl] = useState('');
+
+  // Function to get the socket URL
+  const getSocketUrl = useCallback(() => {
+    // First try environment variable
+    if (process.env.REACT_APP_SOCKET_URL) {
+      return process.env.REACT_APP_SOCKET_URL;
+    }
+    
+    // Then try localStorage (for dynamic port)
+    const savedApiUrl = localStorage.getItem('API_URL');
+    if (savedApiUrl) {
+      // Convert API URL to socket URL (remove /api and add socket.io path)
+      return savedApiUrl.replace('/api', '');
+    }
+    
+    // Default to localhost with default port
+    return 'http://localhost:5003';
+  }, []);
+
+  // Function to discover socket URL
+  const discoverSocketUrl = useCallback(async () => {
+    // Try common ports
+    const ports = [5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010, 5011];
+    
+    for (const port of ports) {
+      try {
+        const url = `http://localhost:${port}/socket.io/?EIO=4&transport=polling`;
+        const response = await axios.get(url, { timeout: 1000 });
+        if (response.status === 200) {
+          const newSocketUrl = `http://localhost:${port}`;
+          setSocketUrl(newSocketUrl);
+          return newSocketUrl;
+        }
+      } catch (err) {
+        // Continue to next port
+        console.log(`Socket port ${port} not available`);
+      }
+    }
+    
+    throw new Error('Could not find Socket.IO server');
+  }, []);
 
   useEffect(() => {
-    // Only connect if user is authenticated
     if (user && user.id) {
-      // Create socket connection
-      const newSocket = io('http://localhost:5002', {
-        auth: {
-          token: localStorage.getItem('accessToken')
-        },
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
-      });
+      // Clear any cached socket URLs
+      localStorage.removeItem('SOCKET_URL');
+      
+      const initializeSocket = async () => {
+        try {
+          // Get socket URL
+          let currentSocketUrl = getSocketUrl();
+          
+          // If we don't have a socket URL yet, try to discover it
+          if (!currentSocketUrl) {
+            try {
+              currentSocketUrl = await discoverSocketUrl();
+            } catch (err) {
+              console.error('Could not discover socket URL:', err);
+              return;
+            }
+          }
+          
+          // Create socket connection
+          const newSocket = io(currentSocketUrl, {
+            auth: {
+              token: localStorage.getItem('accessToken')
+            },
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000,
+            autoConnect: true,
+            forceNew: true
+          });
 
-      // Socket event handlers
-      newSocket.on('connect', () => {
-        console.log('Socket connected successfully');
-        setConnected(true);
-      });
+          newSocket.on('connect', () => {
+            console.log('Socket connected successfully');
+            setConnected(true);
+          });
 
-      newSocket.on('disconnect', () => {
-        console.log('Socket disconnected');
-        setConnected(false);
-      });
+          newSocket.on('connect_error', (error) => {
+            console.error('Socket connection error:', error.message);
+            setConnected(false);
+            
+            // If connection fails, try to discover a new socket URL
+            if (error.message.includes('xhr poll error') || error.message.includes('transport error')) {
+              discoverSocketUrl().catch(err => {
+                console.error('Failed to discover new socket URL:', err);
+              });
+            }
+          });
 
-      newSocket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error.message);
-      });
+          newSocket.on('disconnect', (reason) => {
+            console.log('Socket disconnected:', reason);
+            setConnected(false);
+            if (reason === 'io server disconnect') {
+              // Server initiated disconnect, try to reconnect
+              newSocket.connect();
+            }
+          });
 
-      newSocket.on('connect_timeout', () => {
-        console.error('Socket connection timeout');
-      });
+          newSocket.on('reconnect', (attemptNumber) => {
+            console.log(`Socket reconnected after ${attemptNumber} attempts`);
+            setConnected(true);
+          });
 
-      newSocket.on('reconnect', (attemptNumber) => {
-        console.log(`Socket reconnected after ${attemptNumber} attempts`);
-        setConnected(true);
-      });
+          newSocket.on('reconnect_attempt', (attemptNumber) => {
+            console.log(`Socket reconnection attempt #${attemptNumber}`);
+          });
 
-      newSocket.on('reconnect_attempt', (attemptNumber) => {
-        console.log(`Socket reconnection attempt #${attemptNumber}`);
-      });
+          newSocket.on('reconnect_error', (error) => {
+            console.error('Socket reconnection error:', error.message);
+          });
 
-      newSocket.on('reconnect_error', (error) => {
-        console.error('Socket reconnection error:', error.message);
-      });
+          newSocket.on('reconnect_failed', () => {
+            console.error('Socket reconnection failed');
+            setConnected(false);
+          });
 
-      newSocket.on('reconnect_failed', () => {
-        console.error('Socket reconnection failed');
-      });
+          setSocket(newSocket);
 
-      newSocket.on('error', (error) => {
-        console.error('Socket error:', error);
-      });
-
-      // Handle notifications based on user role
-      if (user.role === 'donor') {
-        setupDonorEvents(newSocket);
-      } else if (user.role === 'receiver') {
-        setupReceiverEvents(newSocket);
-      } else if (user.role === 'admin') {
-        setupAdminEvents(newSocket);
-      }
-
-      setSocket(newSocket);
-
-      // Cleanup on unmount
-      return () => {
-        newSocket.disconnect();
+          return () => {
+            if (newSocket) {
+              newSocket.disconnect();
+            }
+          };
+        } catch (error) {
+          console.error('Error initializing socket:', error);
+        }
       };
+
+      initializeSocket();
     }
-  }, [user]);
+  }, [user, getSocketUrl, discoverSocketUrl]);
 
   // Setup donor-specific socket events
   const setupDonorEvents = (socket) => {
@@ -122,9 +188,17 @@ export const SocketProvider = ({ children }) => {
   const setupReceiverEvents = (socket) => {
     socket.on('new-food-post-available', (data) => {
       console.log('New food post available:', data);
+
+      // Show a toast notification
+      toast.success(`New food donation available from ${data.donorName || 'a donor'}!`, {
+        icon: '🍲', // Food emoji
+        duration: 5000
+      });
+
+      // Add a notification
       addNotification({
         type: 'new-food-post',
-        message: `New food donation available from ${data.donorName}`,
+        message: `New food donation available from ${data.donorName || 'a donor'}`,
         data
       });
     });
@@ -282,7 +356,7 @@ export const SocketProvider = ({ children }) => {
   };
 
   // Update food post fields (food type, category, expiry date, pickup time)
-  const updateFoodPostFields = (postId, fields) => {
+  const updateFoodPostFields = async (postId, fields) => {
     if (socket && connected) {
       console.log('Updating food post fields via socket:', { postId, ...fields });
       socket.emit('update-food-post-fields', { postId, ...fields });
@@ -294,9 +368,14 @@ export const SocketProvider = ({ children }) => {
         const token = localStorage.getItem('accessToken');
         if (token) {
           console.log('Attempting to update via REST API as fallback');
-          // This is a fallback mechanism - in a real app, you would implement the API call here
-          // For now, we'll just log the attempt
-          return false;
+          // Make a REST API call to update the food post
+          const response = await axios.put(
+            `http://localhost:5002/api/food-posts/update/${postId}`,
+            fields,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          console.log('REST API update response:', response.data);
+          return true;
         }
       } catch (error) {
         console.error('Failed to update fields:', error);

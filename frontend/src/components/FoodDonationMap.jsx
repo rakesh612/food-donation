@@ -75,7 +75,10 @@ function RoutingControl({ from, to }) {
   const map = useMap();
 
   useEffect(() => {
-    if (!map || !from || !to) return;
+    if (!map || !from || !to || !from.lat || !from.lng || !to.lat || !to.lng) {
+      console.error('Invalid routing parameters:', { from, to });
+      return;
+    }
 
     const routingControl = L.Routing.control({
       waypoints: [from, to],
@@ -102,19 +105,33 @@ const FoodDonationMap = ({ foodItems, onSelectItem, userLocation: propUserLocati
 
   // Use the user location from props if available, otherwise get it from geolocation
   useEffect(() => {
-    if (propUserLocation) {
-      setMapUserLocation(new L.LatLng(propUserLocation.lat, propUserLocation.lng));
-    } else {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setMapUserLocation(new L.LatLng(position.coords.latitude, position.coords.longitude));
-        },
-        (error) => {
-          console.error('Error getting location:', error);
-          // Default to a central location in India if geolocation fails
-          setMapUserLocation(new L.LatLng(20.5937, 78.9629));
-        }
-      );
+    // Default to a central location in India
+    const defaultLocation = new L.LatLng(20.5937, 78.9629);
+
+    try {
+      if (propUserLocation && propUserLocation.lat && propUserLocation.lng) {
+        // Make sure we have valid coordinates
+        setMapUserLocation(new L.LatLng(propUserLocation.lat, propUserLocation.lng));
+      } else if (navigator.geolocation) {
+        // Try to get user's location
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            setMapUserLocation(new L.LatLng(position.coords.latitude, position.coords.longitude));
+          },
+          (error) => {
+            console.error('Error getting location:', error);
+            // Use default location if geolocation fails
+            setMapUserLocation(defaultLocation);
+          }
+        );
+      } else {
+        // Use default location if geolocation is not available
+        setMapUserLocation(defaultLocation);
+      }
+    } catch (error) {
+      console.error('Error setting map location:', error);
+      // Use default location if there's any error
+      setMapUserLocation(defaultLocation);
     }
   }, [propUserLocation]);
 
@@ -162,8 +179,8 @@ const FoodDonationMap = ({ foodItems, onSelectItem, userLocation: propUserLocati
   return (
     <div className="h-[500px] rounded-lg overflow-hidden relative">
       <MapContainer
-        center={mapUserLocation ? [mapUserLocation.lat, mapUserLocation.lng] : [20.5937, 78.9629]}
-        zoom={mapUserLocation ? 12 : 5} // Zoom in closer if we have user location
+        center={mapUserLocation && mapUserLocation.lat && mapUserLocation.lng ? [mapUserLocation.lat, mapUserLocation.lng] : [20.5937, 78.9629]}
+        zoom={10} // Fixed zoom level for consistency
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
       >
@@ -174,10 +191,10 @@ const FoodDonationMap = ({ foodItems, onSelectItem, userLocation: propUserLocati
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
 
-        {foodItems.map((item) => (
+        {foodItems.filter(item => item && item.lat && item.lng).map((item) => (
           <Marker
             key={item.id}
-            position={[item.lat || 0, item.lng || 0]}
+            position={[item.lat, item.lng]}
             icon={getMarkerIcon(
               item.status === 'accepted' ? 'accepted' :
               item.status === 'picked' ? 'picked' :
@@ -218,15 +235,16 @@ const FoodDonationMap = ({ foodItems, onSelectItem, userLocation: propUserLocati
           </Marker>
         ))}
 
-        {showDirections && mapUserLocation && selectedForDirections && (
+        {showDirections && mapUserLocation && selectedForDirections &&
+          selectedForDirections.lat && selectedForDirections.lng && (
           <RoutingControl
             from={mapUserLocation}
-            to={new L.LatLng(selectedForDirections.lat || 0, selectedForDirections.lng || 0)}
+            to={new L.LatLng(selectedForDirections.lat, selectedForDirections.lng)}
           />
         )}
 
         {/* Add a marker for the user's location */}
-        {mapUserLocation && (
+        {mapUserLocation && mapUserLocation.lat && mapUserLocation.lng && (
           <Marker
             position={[mapUserLocation.lat, mapUserLocation.lng]}
             icon={new Icon({

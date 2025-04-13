@@ -38,186 +38,115 @@ const ReceiverPanel = () => {
   const [rating, setRating] = useState(0);
   const [feedback, setFeedback] = useState("");
   const [userLocation, setUserLocation] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [selectedForDirections, setSelectedForDirections] = useState(null);
+
+  // Get user's location
+  useEffect(() => {
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.error("Error getting location:", error);
+          setError("Unable to get your location. Please enable location services.");
+        }
+      );
+    } else {
+      setError("Geolocation is not supported by your browser");
+    }
+  }, []);
 
   // Fetch nearby food posts
   const fetchNearbyFoodPosts = async () => {
     try {
-      if (!user) {
-        // Use mock data for non-authenticated users
-        useMockData();
-        return Promise.resolve();
+      if (!userLocation) {
+        console.log('No user location available');
+        return;
       }
 
-      console.log('Fetching nearby food posts with filters:', filters);
-      const token = localStorage.getItem('accessToken');
+      setIsLoading(true);
+      setErrorMessage(null);
 
-      // Get user's current location
-      let userLatitude = 17.3850; // Default location
-      let userLongitude = 78.4867; // Default location
+      const response = await axios.get(`http://localhost:5002/api/food-posts/nearby`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
+        params: {
+          latitude: userLocation.lat || 17.3850,
+          longitude: userLocation.lng || 78.4867,
+          maxDistance: filters.maxDistance || 1000000
+        }
+      });
 
-      try {
-        // Try to get user's actual location
-        const position = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 5000,
-            maximumAge: 0
-          });
-        });
-
-        userLatitude = position.coords.latitude;
-        userLongitude = position.coords.longitude;
-
-        setUserLocation({
-          lat: userLatitude,
-          lng: userLongitude
-        });
-
-        console.log(`Using user's actual location: ${userLatitude}, ${userLongitude}`);
-      } catch (locationError) {
-        console.warn('Could not get user location, using default:', locationError);
-        setUserLocation({
-          lat: userLatitude,
-          lng: userLongitude
-        });
-      }
-
-      try {
-        // Call API to get nearby food posts with increased radius
-        let response = await axios.get('http://localhost:5002/api/food-posts/nearby', {
-          headers: { Authorization: `Bearer ${token}` },
-          params: {
-            latitude: userLatitude,
-            longitude: userLongitude,
-            maxDistance: 100000 // 100km radius to show more posts
-          }
-        });
-
-        console.log('API response:', response.data);
-
-        // Transform API response to match our UI format
-        const posts = response.data.map(post => {
-          // Calculate days until expiry
-          const expiryDate = new Date(post.expiryWindow);
-          const today = new Date();
-          const diffTime = expiryDate - today;
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-          // Format expiry text
-          let expiryText = '';
-          if (diffDays < 0) {
-            expiryText = 'Expired';
-          } else if (diffDays === 0) {
-            expiryText = 'Today';
-          } else if (diffDays === 1) {
-            expiryText = 'Tomorrow';
-          } else {
-            expiryText = `In ${diffDays} days`;
-          }
-
-          // Get donor name if available
-          const donorName = post.donorId && typeof post.donorId === 'object' ? post.donorId.name : 'Anonymous Donor';
-
-          // Get location information
-          let locationAddress = 'Location available on map';
-          let locationCoordinates = [0, 0];
-
-          if (post.location) {
-            if (post.location.address) {
-              locationAddress = post.location.address;
-            }
-
-            if (post.location.coordinates && Array.isArray(post.location.coordinates) && post.location.coordinates.length === 2) {
-              locationCoordinates = post.location.coordinates;
-            }
-          }
-
-          return {
-            id: post._id,
-            name: `${post.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'} ${post.category || 'Food'}`,
-            donorName: donorName,
-            location: locationAddress,
-            distance: post.distance / 1000, // Convert meters to kilometers
-            distanceText: `${(post.distance / 1000).toFixed(1)} km`,
-            expires: expiryText,
-            expiryDays: diffDays,
-            quantity: `${post.quantity || 0} kgs`,
-            type: post.foodType || 'veg',
-            perishable: post.category || 'perishable',
-            donorId: post.donorId && post.donorId._id ? post.donorId._id : post.donorId,
-            imageUrl: post.imageUrl,
-            notes: post.notes || 'No additional notes',
-            lat: locationCoordinates[1],
-            lng: locationCoordinates[0],
-            status: post.status || 'available',
-            createdAt: post.createdAt || new Date().toISOString(),
-            updatedAt: post.updatedAt || new Date().toISOString()
-          };
-        });
-
-        // Sort posts by distance and freshness
-        posts.sort((a, b) => {
-          // First sort by expiry (fresher first)
-          if (a.expiryDays !== b.expiryDays) {
-            return a.expiryDays - b.expiryDays;
-          }
-          // Then by distance (closer first)
-          return a.distance - b.distance;
-        });
-
-        setFoodItems(posts);
-        return Promise.resolve(posts);
-      } catch (apiError) {
-        console.error('Error fetching food posts:', apiError);
-        useMockData();
-        return Promise.reject(apiError);
-      }
+      setFoodItems(response.data);
+      setIsLoading(false);
+      return response.data; // Return the posts for promise handling
     } catch (error) {
-      console.error('Error in fetchNearbyFoodPosts:', error);
-      useMockData();
-      return Promise.reject(error);
+      console.error('Error fetching nearby food posts:', error);
+      setErrorMessage('Failed to fetch nearby food posts');
+      setIsLoading(false);
+      return Promise.reject(error); // Reject the promise for error handling
     }
   };
 
-  // Fallback to mock data
-  const useMockData = () => {
-    setFoodItems([
-      {
-        id: 1,
-        name: "Fresh Produce",
-        location: "Downtown Community Center",
-        distance: 0.8,
-        distanceText: "0.8 miles",
-        expires: "Tomorrow",
-        expiryDays: 1,
-        quantity: "15 boxes",
-        type: "vegetables"
-      },
-      {
-        id: 2,
-        name: "Canned Goods",
-        location: "North Food Bank",
-        distance: 1.2,
-        distanceText: "1.2 miles",
-        expires: "Next week",
-        expiryDays: 7,
-        quantity: "30 units",
-        type: "non-perishable"
-      },
-      {
-        id: 3,
-        name: "Baked Goods",
-        location: "East Side Bakery",
-        distance: 0.5,
-        distanceText: "0.5 miles",
-        expires: "Today",
-        expiryDays: 0,
-        quantity: "25 items",
-        type: "grains"
-      }
-    ]);
-  };
+  // Fetch food posts when component mounts or filters change
+  useEffect(() => {
+    if (user && isVerified) {
+      console.log('Fetching food posts on mount or filter change');
+      setIsLoading(true);
+      fetchNearbyFoodPosts()
+        .then(posts => {
+          console.log(`Fetched ${posts?.length || 0} food posts`);
+          setIsLoading(false);
+        })
+        .catch(error => {
+          console.error('Error fetching food posts:', error);
+          setIsLoading(false);
+        });
+    }
+  }, [user, isVerified, filters.maxDistance]);
+
+  // Set up real-time updates
+  useEffect(() => {
+    if (!socket) return;
+
+    // Listen for new food posts
+    socket.on('new-food-post', (newPost) => {
+      setFoodItems(prevItems => {
+        // Check if post is within current distance filter
+        if (newPost.distance <= filters.maxDistance) {
+          return [...prevItems, newPost].sort((a, b) => a.distance - b.distance);
+        }
+        return prevItems;
+      });
+    });
+
+    // Listen for food post updates
+    socket.on('food-post-updated', (updatedPost) => {
+      setFoodItems(prevItems =>
+        prevItems.map(item =>
+          item._id === updatedPost._id ? updatedPost : item
+        ).sort((a, b) => a.distance - b.distance)
+      );
+    });
+
+    // Listen for food post deletions
+    socket.on('food-post-deleted', (postId) => {
+      setFoodItems(prevItems =>
+        prevItems.filter(item => item._id !== postId)
+      );
+    });
+
+    return () => {
+      socket.off('new-food-post');
+      socket.off('food-post-updated');
+      socket.off('food-post-deleted');
+    };
+  }, [socket, filters.maxDistance]);
 
   // Set user type and verification status when user changes
   useEffect(() => {
@@ -245,93 +174,45 @@ const ReceiverPanel = () => {
   // Fetch food posts on component mount and when filters change
   useEffect(() => {
     if (user && isVerified) {
-      fetchNearbyFoodPosts();
+      console.log('User is verified, fetching food posts...');
+      fetchNearbyFoodPosts()
+        .then(posts => {
+          console.log('Successfully fetched food posts:', posts?.length || 0);
+        })
+        .catch(error => {
+          console.error('Error fetching food posts:', error);
+        });
+    } else {
+      console.log('User not verified or not logged in, skipping food post fetch');
     }
-  }, [user, isVerified, filters.maxDistance, fetchNearbyFoodPosts]);
+  }, [user, isVerified, filters.maxDistance]);
 
   // This auto-verification logic is now handled in the main useEffect above
 
   // Refresh food posts periodically
   useEffect(() => {
     if (user && isVerified) {
-      // Initial fetch
-      fetchNearbyFoodPosts();
+      console.log('Setting up periodic refresh for food posts');
 
-      // Also fetch all food posts directly
-      const fetchAllFoodPosts = async () => {
-        try {
-          const token = localStorage.getItem('accessToken');
-          console.log('Directly fetching all food posts...');
-
-          const response = await axios.get('http://localhost:5002/api/food-posts/nearby', {
-            headers: { Authorization: `Bearer ${token}` },
-            params: {
-              latitude: 17.3850,
-              longitude: 78.4867,
-              maxDistance: 100000 // 100km radius for testing
-            }
-          });
-
-          console.log('All food posts response:', response.data);
-
-          if (response.data && response.data.length > 0) {
-            // Transform API response to match our UI format
-            const posts = response.data.map(post => {
-              // Calculate days until expiry
-              const expiryDate = new Date(post.expiryWindow);
-              const today = new Date();
-              const diffTime = expiryDate - today;
-              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-              // Format expiry text
-              let expiryText = '';
-              if (diffDays < 0) {
-                expiryText = 'Expired';
-              } else if (diffDays === 0) {
-                expiryText = 'Today';
-              } else if (diffDays === 1) {
-                expiryText = 'Tomorrow';
-              } else {
-                expiryText = `In ${diffDays} days`;
-              }
-
-              return {
-                id: post._id,
-                name: `${post.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'} ${post.category}`,
-                location: post.location.address || 'Location available on map',
-                distance: post.distance / 1000, // Convert meters to kilometers
-                distanceText: `${(post.distance / 1000).toFixed(1)} km`,
-                expires: expiryText,
-                expiryDays: diffDays,
-                quantity: `${post.quantity} kgs`,
-                type: post.foodType,
-                perishable: post.category, // Add perishable field
-                donorId: post.donorId,
-                imageUrl: post.imageUrl,
-                notes: post.notes || 'No additional notes'
-              };
-            });
-
-            setFoodItems(posts);
-          }
-        } catch (error) {
-          console.error('Error fetching all food posts:', error);
-        }
-      };
-
-      // Call the direct fetch function
-      fetchAllFoodPosts();
-
-      // Set up interval to refresh every 10 seconds
+      // Set up interval to refresh every 30 seconds
       const intervalId = setInterval(() => {
-        console.log('Refreshing food posts...');
-        fetchAllFoodPosts(); // Use the direct fetch instead
-      }, 10000);
+        console.log('Periodic refresh: fetching food posts...');
+        fetchNearbyFoodPosts()
+          .then(posts => {
+            console.log('Periodic refresh successful, got', posts?.length || 0, 'posts');
+          })
+          .catch(error => {
+            console.error('Error in periodic refresh:', error);
+          });
+      }, 30000); // Every 30 seconds
 
       // Clean up interval on unmount
-      return () => clearInterval(intervalId);
+      return () => {
+        console.log('Cleaning up periodic refresh interval');
+        clearInterval(intervalId);
+      };
     }
-  }, [user, isVerified, filters.maxDistance]);
+  }, [user, isVerified]);
 
   // Join food post rooms for real-time updates
   useEffect(() => {
@@ -357,11 +238,19 @@ const ReceiverPanel = () => {
   // Listen for broadcast food post events
   useEffect(() => {
     if (connected && socket) {
+      console.log('Setting up socket event listeners for food posts');
+
       // Add listener for broadcast food post events
       socket.on('broadcast-food-post', (data) => {
         console.log('Received broadcast food post event:', data);
-        toast.success('New food donation has been posted!');
-        fetchNearbyFoodPosts(); // Refresh food items
+        toast.success('New food donation has been posted!', {
+          icon: '🍲',
+          duration: 5000
+        });
+        // Refresh the food posts to get the latest data
+        fetchNearbyFoodPosts()
+          .then(() => console.log('Successfully refreshed food posts after broadcast event'))
+          .catch(err => console.error('Failed to refresh food posts after broadcast event:', err));
       });
 
       // Add listener for new food post available events
@@ -371,63 +260,20 @@ const ReceiverPanel = () => {
           icon: '🍲',
           duration: 5000
         });
-
-        // Add the new post to the existing list without a full refresh
-        if (data && data._id) {
-          const expiryDate = new Date(data.expiryWindow);
-          const today = new Date();
-          const diffTime = expiryDate - today;
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-          // Format expiry text
-          let expiryText = '';
-          if (diffDays < 0) {
-            expiryText = 'Expired';
-          } else if (diffDays === 0) {
-            expiryText = 'Today';
-          } else if (diffDays === 1) {
-            expiryText = 'Tomorrow';
-          } else {
-            expiryText = `In ${diffDays} days`;
-          }
-
-          // Create a new food item from the socket data
-          const newFoodItem = {
-            id: data._id,
-            name: `${data.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'} ${data.category || 'Food'}`,
-            donorName: data.donorName || 'Anonymous Donor',
-            location: data.location?.address || 'Location available on map',
-            distance: 0, // Will be updated on next refresh
-            distanceText: 'Just added',
-            expires: expiryText,
-            expiryDays: diffDays,
-            quantity: `${data.quantity || 0} kgs`,
-            type: data.foodType || 'veg',
-            perishable: data.category || 'perishable',
-            donorId: data.donorId,
-            imageUrl: data.imageUrl,
-            notes: data.notes || 'No additional notes',
-            lat: data.location?.coordinates?.[1] || 0,
-            lng: data.location?.coordinates?.[0] || 0,
-            status: 'available',
-            createdAt: data.createdAt || new Date().toISOString()
-          };
-
-          // Add to the beginning of the list
-          setFoodItems(prevItems => [newFoodItem, ...prevItems]);
-        } else {
-          // Fallback to full refresh if data is incomplete
-          fetchNearbyFoodPosts();
-        }
+        // Refresh the food posts to get the latest data
+        fetchNearbyFoodPosts()
+          .then(() => console.log('Successfully refreshed food posts after new post event'))
+          .catch(err => console.error('Failed to refresh food posts after new post event:', err));
       });
 
       // Clean up listeners on unmount
       return () => {
+        console.log('Cleaning up socket event listeners');
         socket.off('broadcast-food-post');
         socket.off('new-food-post-available');
       };
     }
-  }, [connected, socket, fetchNearbyFoodPosts]);
+  }, [connected, socket]);
 
   // Handle real-time notifications
   useEffect(() => {
@@ -437,66 +283,18 @@ const ReceiverPanel = () => {
       if (!latestNotification.read) {
         switch (latestNotification.type) {
           case 'new-food-post':
-            toast.success('New food donation available nearby!', {
+            console.log('New food post notification received:', latestNotification.data);
+
+            // Show a toast notification
+            toast.success(`New food donation available from ${latestNotification.data?.donorName || 'a donor'}!`, {
               icon: '🍲',
               duration: 5000
             });
-            console.log('New food post notification received:', latestNotification.data);
 
-            // Add the new post to the existing list if we have the data
-            if (latestNotification.data && latestNotification.data._id) {
-              const newPostData = latestNotification.data;
-
-              // Check if this post is already in our list
-              const existingPostIndex = foodItems.findIndex(item => item.id === newPostData._id);
-
-              if (existingPostIndex === -1) {
-                // Create a new food item from the notification data
-                const expiryDate = new Date(newPostData.expiryWindow || new Date());
-                const today = new Date();
-                const diffTime = expiryDate - today;
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                // Format expiry text
-                let expiryText = '';
-                if (diffDays < 0) {
-                  expiryText = 'Expired';
-                } else if (diffDays === 0) {
-                  expiryText = 'Today';
-                } else if (diffDays === 1) {
-                  expiryText = 'Tomorrow';
-                } else {
-                  expiryText = `In ${diffDays} days`;
-                }
-
-                const newFoodItem = {
-                  id: newPostData._id,
-                  name: `${newPostData.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'} ${newPostData.category || 'Food'}`,
-                  donorName: newPostData.donorName || 'Anonymous Donor',
-                  location: newPostData.location?.address || 'Location available on map',
-                  distance: 0,
-                  distanceText: 'Just added',
-                  expires: expiryText,
-                  expiryDays: diffDays,
-                  quantity: `${newPostData.quantity || 0} kgs`,
-                  type: newPostData.foodType || 'veg',
-                  perishable: newPostData.category || 'perishable',
-                  donorId: newPostData.donorId,
-                  imageUrl: newPostData.imageUrl,
-                  notes: newPostData.notes || 'No additional notes',
-                  lat: newPostData.location?.coordinates?.[1] || 0,
-                  lng: newPostData.location?.coordinates?.[0] || 0,
-                  status: 'available',
-                  createdAt: newPostData.createdAt || new Date().toISOString()
-                };
-
-                // Add to the beginning of the list
-                setFoodItems(prevItems => [newFoodItem, ...prevItems]);
-              }
-            } else {
-              // Fallback to full refresh if data is incomplete
-              fetchNearbyFoodPosts();
-            }
+            // Refresh the food posts to get the latest data
+            fetchNearbyFoodPosts()
+              .then(() => console.log('Successfully refreshed food posts after notification'))
+              .catch(err => console.error('Failed to refresh food posts after notification:', err));
             break;
           case 'fields-updated':
             toast.info('A food donation has been updated!');
@@ -1317,21 +1115,51 @@ const ReceiverPanel = () => {
             </div>
 
             {activeTab === "map" ? (
-              <div className="bg-white p-4 rounded-lg shadow-md">
+              <div className="bg-white p-4 rounded-lg shadow-md relative">
+                {isLoading && (
+                  <div className="absolute inset-0 bg-white bg-opacity-70 flex items-center justify-center z-10">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto"></div>
+                      <p className="mt-2 text-green-600 font-medium">Loading food donations...</p>
+                    </div>
+                  </div>
+                )}
+
+                {errorMessage && (
+                  <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">
+                    <p>{errorMessage}</p>
+                    <button
+                      onClick={() => {
+                        setErrorMessage(null);
+                        fetchNearbyFoodPosts();
+                      }}
+                      className="mt-2 text-sm text-red-700 underline"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
                 <FoodDonationMap
-                  foodItems={filteredItems.map(item => ({
-                    ...item,
-                    lat: item.lat || (Math.random() * 10) + 15, // Fallback coordinates for testing
-                    lng: item.lng || (Math.random() * 10) + 70  // Fallback coordinates for testing
-                  }))}
+                  foodItems={filteredItems.map(item => {
+                    // Generate consistent coordinates based on item id
+                    const itemId = parseInt(item.id.toString().replace(/[^0-9]/g, '') || '0');
+                    const randomLat = 17.3850 + (itemId % 10) * 0.01;
+                    const randomLng = 78.4867 + (itemId % 5) * 0.01;
+
+                    return {
+                      ...item,
+                      lat: item.lat || randomLat, // Fallback coordinates
+                      lng: item.lng || randomLng  // Fallback coordinates
+                    };
+                  })}
                   onSelectItem={handleSelectDonation}
-                  userLocation={userLocation}
-                  initialSelectedForDirections={selectedForDirections}
+                  userLocation={userLocation || { lat: 17.3850, lng: 78.4867 }}
+                  initialSelectedForDirections={selectedForDirections || null}
                 />
 
                 <div className="mt-4">
                   <div className="flex justify-between items-center mb-2">
-                    <h3 className="font-semibold text-lg">Nearest Food Locations</h3>
+                    <h3 className="font-semibold text-lg">Food Donation Locations</h3>
                     <button
                       onClick={() => {
                         toast.loading('Refreshing food donations...', { id: 'refresh-toast' });
@@ -1352,8 +1180,7 @@ const ReceiverPanel = () => {
                   </div>
                   <div className="mt-3 space-y-3">
                     {filteredItems
-                      .sort((a, b) => a.distance - b.distance)
-                      .slice(0, 3)
+                      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) // Sort by newest first
                       .map(item => (
                         <div
                           key={item.id}
@@ -1375,12 +1202,35 @@ const ReceiverPanel = () => {
                 </div>
               </div>
             ) : activeTab === "list" ? (
-              <div className="bg-white p-4 rounded-lg shadow-md">
+              <div className="bg-white p-4 rounded-lg shadow-md relative">
+                {isLoading && (
+                  <div className="absolute inset-0 bg-white bg-opacity-70 flex items-center justify-center z-10">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto"></div>
+                      <p className="mt-2 text-green-600 font-medium">Loading food donations...</p>
+                    </div>
+                  </div>
+                )}
+
+                {errorMessage && (
+                  <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">
+                    <p>{errorMessage}</p>
+                    <button
+                      onClick={() => {
+                        setErrorMessage(null);
+                        fetchNearbyFoodPosts();
+                      }}
+                      className="mt-2 text-sm text-red-700 underline"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                )}
                 <div className="flex justify-between items-center mb-4">
                   <div>
-                    <h3 className="font-semibold text-lg">Available Food Items</h3>
+                    <h3 className="font-semibold text-lg">Available Food Donations</h3>
                     <p className="text-sm text-gray-500">
-                      Showing {filteredItems.length} items within {filters.maxDistance}km
+                      Showing {filteredItems.length} donations from donors
                     </p>
                   </div>
                   <button
@@ -1407,8 +1257,8 @@ const ReceiverPanel = () => {
                   <button
                     onClick={() => setFilters({...filters, foodType: 'all'})}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      filters.foodType === 'all' 
-                        ? 'bg-green-600 text-white' 
+                      filters.foodType === 'all'
+                        ? 'bg-green-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
@@ -1417,8 +1267,8 @@ const ReceiverPanel = () => {
                   <button
                     onClick={() => setFilters({...filters, foodType: 'veg'})}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      filters.foodType === 'veg' 
-                        ? 'bg-green-600 text-white' 
+                      filters.foodType === 'veg'
+                        ? 'bg-green-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
@@ -1427,8 +1277,8 @@ const ReceiverPanel = () => {
                   <button
                     onClick={() => setFilters({...filters, foodType: 'non-veg'})}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      filters.foodType === 'non-veg' 
-                        ? 'bg-green-600 text-white' 
+                      filters.foodType === 'non-veg'
+                        ? 'bg-green-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
@@ -1437,8 +1287,8 @@ const ReceiverPanel = () => {
                   <button
                     onClick={() => setFilters({...filters, category: 'perishable'})}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      filters.category === 'perishable' 
-                        ? 'bg-green-600 text-white' 
+                      filters.category === 'perishable'
+                        ? 'bg-green-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
@@ -1447,8 +1297,8 @@ const ReceiverPanel = () => {
                   <button
                     onClick={() => setFilters({...filters, category: 'non-perishable'})}
                     className={`px-3 py-1 rounded-full text-sm ${
-                      filters.category === 'non-perishable' 
-                        ? 'bg-green-600 text-white' 
+                      filters.category === 'non-perishable'
+                        ? 'bg-green-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
