@@ -1,13 +1,14 @@
-import React, { useState, useRef, useEffect, useContext } from 'react';
-import { UploadCloud, Calendar, Clock, MapPin, Send, Check, Truck, CheckCircle, X, Menu, User, LogOut } from 'lucide-react';
+import React, { useState, useRef, useEffect, useContext, useCallback } from 'react';
+import { UploadCloud, Calendar, Clock, MapPin, Send, Check, Truck, CheckCircle, X, Menu, User } from 'lucide-react';
 import { AuthContext } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import debounce from 'lodash/debounce';
 
 const DonorPanel = () => {
-  const { user, login, register, logout, loading } = useContext(AuthContext);
-  const { connected, notifications, joinFoodPostRoom, socket } = useSocket();
+  const { user, login, register, loading } = useContext(AuthContext);
+  const { connected, notifications, joinFoodPostRoom, socket, updateFoodPostFields } = useSocket();
 
   // Authentication States
   const [authMode, setAuthMode] = useState('login');
@@ -19,14 +20,25 @@ const DonorPanel = () => {
     donorType: 'individual',
   });
 
+  // Get default expiry date (tomorrow) and time (noon)
+  const getTomorrowDate = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  };
+
+  const getDefaultTime = () => {
+    return '12:00'; // Default to noon
+  };
+
   // Donation Form States
   const [donationForm, setDonationForm] = useState({
     quantity: '',
     estimatedQuantity: '',
-    type: 'veg',
-    perishable: 'perishable',
-    expiryDate: '',
-    expiryTime: '',
+    type: 'veg', // Default to vegetarian
+    perishable: 'perishable', // Default to perishable
+    expiryDate: getTomorrowDate(),
+    expiryTime: getDefaultTime(),
     location: '',
     locationCoords: { lat: null, lng: null },
     notes: '',
@@ -39,6 +51,7 @@ const DonorPanel = () => {
 
   // Donations Tracking State
   const [donations, setDonations] = useState([]);
+  const [editingDonationId, setEditingDonationId] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -47,39 +60,44 @@ const DonorPanel = () => {
     if (user) {
       fetchDonations();
       getUserLocation();
+
+      // Ensure form has default values
+      setDonationForm(prev => ({
+        ...prev,
+        type: prev.type || 'veg',
+        perishable: prev.perishable || 'perishable',
+        expiryDate: prev.expiryDate || getTomorrowDate(),
+        expiryTime: prev.expiryTime || getDefaultTime()
+      }));
     }
   }, [user]);
 
   // Handle socket connections and notifications
   useEffect(() => {
-    // Join rooms for each donation
     if (user && connected && donations.length > 0) {
       donations.forEach(donation => {
         joinFoodPostRoom(donation.id);
       });
     }
-  }, [user, connected, donations]);
+  }, [user, connected, donations, joinFoodPostRoom]);
 
   // Handle notifications
   useEffect(() => {
     if (notifications && notifications.length > 0) {
-      // Process new notifications
       const latestNotification = notifications[0];
-
       if (!latestNotification.read) {
-        // Show toast notification based on type
         switch (latestNotification.type) {
           case 'donation-accepted':
             toast.success('Your donation has been accepted by a receiver');
-            fetchDonations(); // Refresh donations list
+            fetchDonations();
             break;
           case 'donation-picked':
             toast.success('Your donation has been picked up');
-            fetchDonations(); // Refresh donations list
+            fetchDonations();
             break;
           case 'donation-verified':
             toast.success('Your donation has been verified by an admin');
-            fetchDonations(); // Refresh donations list
+            fetchDonations();
             break;
           default:
             break;
@@ -91,9 +109,10 @@ const DonorPanel = () => {
   const fetchDonations = async () => {
     try {
       const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('No access token found');
       const res = await axios.get('http://localhost:5002/api/food-posts', {
         headers: { Authorization: `Bearer ${token}` },
-        params: { donorId: user.id }, // Filter by donor
+        params: { donorId: user.id },
       });
       setDonations(
         res.data.map((post) => ({
@@ -112,30 +131,38 @@ const DonorPanel = () => {
       );
     } catch (error) {
       console.error('Error fetching donations:', error);
+      toast.error('Failed to fetch donations');
     }
   };
 
-  const getUserLocation = () => {
+  const getUserLocation = useCallback(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
           try {
-            // Try to get the actual address using reverse geocoding
+            // Use Nominatim for reverse geocoding
             const response = await fetch(
               `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`
             );
             const data = await response.json();
-            const address = data.display_name || '123 Green Street, Earth City';
 
+            // Get a readable address
+            const address = data.display_name || '123 Green Street, Earth City';
+            console.log('Location found:', address, { lat: latitude, lng: longitude });
+
+            // Update form with location data
             setDonationForm((prev) => ({
               ...prev,
               location: address,
               locationCoords: { lat: latitude, lng: longitude },
             }));
+
+            // Clear any location errors
+            setFormErrors((prev) => ({ ...prev, location: '' }));
           } catch (error) {
-            console.error('Error getting address from coordinates:', error);
-            // Fallback to using coordinates as the address
+            console.error('Error getting address:', error);
+            // Use fallback address with coordinates
             const fallbackAddress = `Location (${latitude.toFixed(6)}, ${longitude.toFixed(6)})`;
             setDonationForm((prev) => ({
               ...prev,
@@ -146,50 +173,92 @@ const DonorPanel = () => {
         },
         (error) => {
           console.error('Error getting user location:', error);
-          // Show error message to user
           setFormErrors((prev) => ({
             ...prev,
-            location: 'Could not access your location. Please enter it manually.'
+            location: 'Could not access your location. Please enter it manually.',
           }));
         },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     } else {
       setFormErrors((prev) => ({
         ...prev,
-        location: 'Geolocation is not supported by your browser. Please enter your location manually.'
+        location: 'Geolocation not supported. Please enter your location manually.',
       }));
     }
-  };
+  }, []);
 
   const validateDonationForm = () => {
     const errors = {};
     const now = new Date();
     const today = now.toISOString().split('T')[0];
 
-    // Validate quantity
+    // Check quantity - either manual or AI-estimated is required
     if (!donationForm.quantity && !donationForm.estimatedQuantity) {
-      errors.quantity = 'Quantity is required';
+      errors.quantity = 'Quantity is required. Please upload an image for AI estimation or enter manually.';
+    } else {
+      // If quantity is provided, make sure it's a valid number
+      if (donationForm.quantity) {
+        const quantityValue = donationForm.quantity.replace(/[^0-9.]/g, '');
+        if (isNaN(parseFloat(quantityValue)) || parseFloat(quantityValue) <= 0) {
+          errors.quantity = 'Please enter a valid quantity (a positive number)';
+        }
+      }
+    }
+
+    // Validate food type
+    if (!donationForm.type) {
+      errors.type = 'Please select a food type';
+    } else if (!['veg', 'non-veg'].includes(donationForm.type)) {
+      errors.type = 'Please select a valid food type';
+    }
+
+    // Validate food category
+    if (!donationForm.perishable) {
+      errors.perishable = 'Please select a food category';
+    } else if (!['perishable', 'non-perishable'].includes(donationForm.perishable)) {
+      errors.perishable = 'Please select a valid food category';
     }
 
     // Validate expiry date
     if (!donationForm.expiryDate) {
       errors.expiryDate = 'Expiry date is required';
-    } else if (donationForm.expiryDate < today) {
-      errors.expiryDate = 'Expiry date cannot be in the past';
+    } else {
+      // Create date objects for comparison (using local timezone)
+      const selectedDate = new Date(donationForm.expiryDate);
+      const todayDate = new Date(today);
+
+      // Reset time components to compare dates only
+      selectedDate.setHours(0, 0, 0, 0);
+      todayDate.setHours(0, 0, 0, 0);
+
+      if (selectedDate < todayDate) {
+        errors.expiryDate = 'Expiry date cannot be in the past';
+      }
     }
 
     // Validate pickup time
     if (!donationForm.expiryTime) {
       errors.expiryTime = 'Pickup time is required';
-    } else if (donationForm.expiryDate === today) {
-      // If today, check if time is in the future
-      const [hours, minutes] = donationForm.expiryTime.split(':').map(Number);
-      const selectedTime = new Date();
-      selectedTime.setHours(hours, minutes, 0, 0);
+    } else {
+      // Check if the date is today, then validate time
+      const selectedDate = new Date(donationForm.expiryDate);
+      const todayDate = new Date(today);
 
-      if (selectedTime < now) {
-        errors.expiryTime = 'Pickup time must be in the future';
+      // Reset time components to compare dates only
+      selectedDate.setHours(0, 0, 0, 0);
+      todayDate.setHours(0, 0, 0, 0);
+
+      // If the selected date is today, check if the time is in the future
+      if (selectedDate.getTime() === todayDate.getTime()) {
+        const [hours, minutes] = donationForm.expiryTime.split(':').map(Number);
+        const currentTime = new Date();
+        const selectedTime = new Date();
+        selectedTime.setHours(hours, minutes, 0, 0);
+
+        if (selectedTime <= currentTime) {
+          errors.expiryTime = 'Pickup time must be in the future';
+        }
       }
     }
 
@@ -197,7 +266,7 @@ const DonorPanel = () => {
     if (!donationForm.location) {
       errors.location = 'Location is required';
     } else if (!donationForm.locationCoords.lat || !donationForm.locationCoords.lng) {
-      errors.location = 'Valid location coordinates are required';
+      errors.location = 'Valid location coordinates are required. Please enter a valid address.';
     }
 
     return errors;
@@ -207,23 +276,145 @@ const DonorPanel = () => {
     const { name, value } = e.target;
 
     if (authMode === 'login' || authMode === 'register') {
+      // Handle login/register form inputs
       setUserData((prev) => ({ ...prev, [name]: value }));
       setLocalAuthError('');
-    } else {
-      setDonationForm((prev) => ({ ...prev, [name]: value }));
-      setFormErrors((prev) => ({ ...prev, [name]: '' }));
+      return;
+    }
+
+    // DONATION FORM HANDLING
+    // Create a new object with the updated value
+    let newFormData = { ...donationForm };
+    newFormData[name] = value;
+
+    // Update the form state with the new value
+    setDonationForm(newFormData);
+
+    // Clear any validation errors for this field
+    if (formErrors[name]) {
+      setFormErrors(prev => ({ ...prev, [name]: '' }));
+    }
+
+    // Handle real-time updates for editing existing donations
+    if (editingDonationId && ['type', 'perishable', 'expiryDate', 'expiryTime', 'notes'].includes(name)) {
+      let updateData = {};
+
+      // Map form fields to API fields
+      switch(name) {
+        case 'type':
+          updateData.foodType = value;
+          break;
+        case 'perishable':
+          updateData.category = value;
+          break;
+        case 'notes':
+          updateData.notes = value;
+          break;
+        case 'expiryDate':
+        case 'expiryTime':
+          // Only update if both date and time are available
+          if (newFormData.expiryDate && newFormData.expiryTime) {
+            try {
+              const [hours, minutes] = newFormData.expiryTime.split(':').map(Number);
+              const [year, month, day] = newFormData.expiryDate.split('-').map(Number);
+
+              // Create date (month is 0-indexed in JS Date)
+              const expiryWindow = new Date(year, month - 1, day, hours, minutes, 0);
+
+              updateData.expiryWindow = expiryWindow;
+              updateData.pickupDeadline = expiryWindow;
+            } catch (error) {
+              console.error('Error creating date object:', error);
+            }
+          }
+          break;
+        default:
+          break;
+      }
+
+      // Send update if we have data
+      if (Object.keys(updateData).length > 0) {
+        updateFoodPostFields(editingDonationId, updateData);
+      }
     }
   };
+
+  // Debounced location update
+  const updateLocationCoords = useCallback(
+    debounce(async (address) => {
+      if (!address) return;
+      try {
+        console.log('Geocoding address:', address);
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`
+        );
+        const data = await response.json();
+        console.log('Geocoding response:', data);
+
+        if (data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          console.log('Coordinates found:', { lat, lng });
+
+          setDonationForm((prev) => ({
+            ...prev,
+            locationCoords: { lat, lng },
+          }));
+
+          // Clear any location errors
+          setFormErrors((prev) => ({ ...prev, location: '' }));
+        } else {
+          console.warn('No coordinates found for address:', address);
+          setFormErrors((prev) => ({
+            ...prev,
+            location: 'Invalid location. Please enter a valid address.',
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching coordinates:', error);
+        setFormErrors((prev) => ({
+          ...prev,
+          location: 'Error validating location. Please try again.',
+        }));
+      }
+    }, 500),
+    []
+  );
+
+  // Update coordinates when location changes
+  useEffect(() => {
+    if (donationForm.location) {
+      updateLocationCoords(donationForm.location);
+    }
+  }, [donationForm.location, updateLocationCoords]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      console.log('Attempting login with:', userData.email);
-      await login(userData.email, userData.password);
+      const response = await login(userData.email, userData.password);
+
+      // Check if the user has the donor role
+      if (response && response.user && response.user.role !== 'donor') {
+        // Single clear message for wrong role
+        toast.error('Login failed. This panel is only for donors. Please use the receiver panel instead.');
+
+        // Clear local error to avoid duplicate messages
+        setLocalAuthError('');
+
+        // Force logout if the user is not a donor
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        window.location.reload();
+        return;
+      }
+
+      toast.success(`Welcome back, ${response.user.name || 'Donor'}!`);
+
       setUserData({ email: '', password: '', name: '', donorType: 'individual' });
     } catch (error) {
-      console.error('Login error in component:', error);
-      setLocalAuthError(error.message || 'Login failed');
+      const errorMessage = error.message || 'Login failed';
+      setLocalAuthError(errorMessage);
+      toast.error(errorMessage);
     }
   };
 
@@ -237,102 +428,297 @@ const DonorPanel = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
     try {
-      // Validate password before submitting
       const passwordError = validatePassword(userData.password);
       if (passwordError) {
         setLocalAuthError(passwordError);
+        toast.error(passwordError);
         return;
       }
 
-      console.log('Attempting registration with:', userData);
-      const role = 'donor'; // Always set role to donor for simplicity
-      await register({
+      // Always register as a donor in the donor panel
+      const response = await register({
         email: userData.email,
         password: userData.password,
         name: userData.name,
-        role,
-        phone: '1234567890', // Placeholder, add phone input if needed
+        role: 'donor', // Enforce donor role
+        phone: '1234567890',
+        donorType: userData.donorType || 'individual'
       });
+
+      // Verify the registered user has the donor role
+      if (response && response.user && response.user.role !== 'donor') {
+        // Single clear message for wrong role during registration
+        toast.error('Registration failed. This panel is only for donors. Please use the receiver panel to register as a receiver.');
+
+        // Force logout if the user is not registered as a donor
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        return;
+      }
+
       setUserData({ email: '', password: '', name: '', donorType: 'individual' });
+      toast.success('Registration successful! You can now donate food.');
     } catch (error) {
-      console.error('Registration error in component:', error);
-      setLocalAuthError(error.message || 'Registration failed');
+      const errorMessage = error.message || 'Registration failed';
+      setLocalAuthError(errorMessage);
+      toast.error(errorMessage);
     }
   };
 
-  const handleLogout = async () => {
-    await logout();
-    setShowMobileMenu(false);
-    setDonationForm({
-      quantity: '',
-      estimatedQuantity: '',
-      type: 'veg',
-      perishable: 'perishable',
-      expiryDate: '',
-      expiryTime: '',
-      location: '',
-      locationCoords: { lat: null, lng: null },
-      notes: '',
-    });
-    setDonations([]);
+  // Reset form data when user changes
+  useEffect(() => {
+    if (!user) {
+      setDonationForm({
+        quantity: '',
+        estimatedQuantity: '',
+        type: 'veg', // Default to vegetarian
+        perishable: 'perishable', // Default to perishable
+        expiryDate: getTomorrowDate(),
+        expiryTime: getDefaultTime(),
+        location: '',
+        locationCoords: { lat: null, lng: null },
+        notes: '',
+      });
+      setDonations([]);
+      setImagePreview(null);
+      setShowMobileMenu(false);
+    }
+  }, [user]);
+
+  // Direct update functions for form fields
+  const updateFoodType = (value) => {
+    setDonationForm(prev => ({
+      ...prev,
+      type: value
+    }));
+  };
+
+  const updateFoodCategory = (value) => {
+    setDonationForm(prev => ({
+      ...prev,
+      perishable: value
+    }));
+  };
+
+  const updateExpiryDate = (value) => {
+    setDonationForm(prev => ({
+      ...prev,
+      expiryDate: value
+    }));
+  };
+
+  const updateExpiryTime = (value) => {
+    setDonationForm(prev => ({
+      ...prev,
+      expiryTime: value
+    }));
+  };
+
+  const updateNotes = (value) => {
+    setDonationForm(prev => ({
+      ...prev,
+      notes: value
+    }));
   };
 
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Process the image file
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setFormErrors((prev) => ({ ...prev, image: 'Please upload an image file' }));
+        return;
+      }
+
+      // Validate file size
+      if (file.size > 10 * 1024 * 1024) {
+        setFormErrors((prev) => ({ ...prev, image: 'Image size must be under 10MB' }));
+        return;
+      }
+
+      // Read and display the image
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreview(reader.result);
-      };
-      reader.readAsDataURL(file);
+        setFormErrors((prev) => ({ ...prev, image: '' }));
 
-      // Simulate AI processing for quantity estimation
-      setIsProcessingImage(true);
-      setTimeout(() => {
-        const mockEstimatedQuantity = `${Math.floor(Math.random() * 10) + 1} kgs`;
-        setDonationForm((prev) => ({
-          ...prev,
-          estimatedQuantity: mockEstimatedQuantity,
-        }));
-        setIsProcessingImage(false);
-      }, 1500);
+        // Start AI estimation process
+        setIsProcessingImage(true);
+
+        // In a real app, this would call an AI service
+        // For now, we'll simulate with a timeout
+        setTimeout(() => {
+          // Generate a realistic quantity estimate
+          const mockEstimatedQuantity = `${Math.floor(Math.random() * 10) + 1} kgs`;
+          console.log('AI estimated quantity:', mockEstimatedQuantity);
+
+          setDonationForm((prev) => ({
+            ...prev,
+            estimatedQuantity: mockEstimatedQuantity,
+          }));
+
+          setIsProcessingImage(false);
+        }, 1500);
+      };
+
+      reader.readAsDataURL(file);
     }
+  };
+
+  const clearImage = () => {
+    setImagePreview(null);
+    setDonationForm((prev) => ({ ...prev, estimatedQuantity: '', quantity: '' }));
+    if (fileInputRef.current) {
+      fileInputRef.current.value = null;
+    }
+  };
+
+  // Handle editing an existing donation
+  const handleEditDonation = (donation) => {
+    // Set the form values from the donation
+    const formData = {
+      quantity: donation.quantity,
+      estimatedQuantity: '',
+      type: donation.type || 'veg', // Fallback to default if missing
+      perishable: donation.perishable || 'perishable', // Fallback to default if missing
+      expiryDate: donation.expiryDate,
+      expiryTime: donation.expiryTime,
+      location: donation.location || '',
+      locationCoords: donation.locationCoords || { lat: null, lng: null },
+      notes: donation.notes || '',
+    };
+    setDonationForm(formData);
+
+    // Set the editing donation ID
+    setEditingDonationId(donation.id);
+
+    // Scroll to the form
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // Show a toast notification
+    toast.success('Editing donation. Make your changes and they will update in real-time.');
   };
 
   const handleSubmitDonation = async (e) => {
     e.preventDefault();
+
+    // Validate form
     const errors = validateDonationForm();
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       return;
     }
 
-    setIsSubmitting(true);
-    try {
-      const token = localStorage.getItem('accessToken');
-      const expiryWindow = new Date(`${donationForm.expiryDate}T${donationForm.expiryTime}:00`);
-      const formData = {
-        quantity: parseFloat(donationForm.quantity || donationForm.estimatedQuantity.replace(/[^0-9.]/g, '')),
+    // If we're editing an existing donation, just update the fields and return
+    if (editingDonationId) {
+      // Create expiry date object
+      const dateParts = donationForm.expiryDate.split('-').map(Number);
+      const [hours, minutes] = donationForm.expiryTime.split(':').map(Number);
+      const expiryWindow = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], hours, minutes, 0);
+
+      // Prepare update data
+      const updateData = {
         foodType: donationForm.type,
         category: donationForm.perishable,
         expiryWindow,
         pickupDeadline: expiryWindow,
-        imageUrl: imagePreview || null, // Replace with cloud storage URL later
+        notes: donationForm.notes
+      };
+
+      // Send real-time update
+      const updateSuccess = updateFoodPostFields(editingDonationId, updateData);
+
+      // Show appropriate success message
+      if (updateSuccess) {
+        toast.success('Donation updated successfully in real-time!');
+      } else {
+        toast.success('Donation updated! Refresh to see changes.');
+      }
+
+      // Reset form
+      setDonationForm({
+        quantity: '',
+        estimatedQuantity: '',
+        type: 'veg', // Default to vegetarian
+        perishable: 'perishable', // Default to perishable
+        expiryDate: getTomorrowDate(),
+        expiryTime: getDefaultTime(),
+        location: donationForm.location,
+        locationCoords: donationForm.locationCoords,
+        notes: '',
+      });
+
+      // Clear editing state
+      setEditingDonationId(null);
+
+      // Refresh donations list
+      await fetchDonations();
+
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Get auth token
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('No access token found');
+
+      // Create expiry date object with proper timezone handling
+      // First create a date object from the date string
+      const dateParts = donationForm.expiryDate.split('-').map(Number);
+      const [hours, minutes] = donationForm.expiryTime.split(':').map(Number);
+
+      // Create date in local timezone (months are 0-indexed in JS Date)
+      const expiryWindow = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], hours, minutes, 0);
+
+      // Extract quantity from form
+      let quantity;
+      if (donationForm.quantity) {
+        // Use manually entered quantity if available
+        quantity = parseFloat(donationForm.quantity.replace(/[^0-9.]/g, ''));
+      } else if (donationForm.estimatedQuantity) {
+        // Use AI estimated quantity as fallback
+        quantity = parseFloat(donationForm.estimatedQuantity.replace(/[^0-9.]/g, ''));
+      } else {
+        quantity = 1; // Default fallback
+      }
+
+      // Check if coordinates are available
+      if (!donationForm.locationCoords.lat || !donationForm.locationCoords.lng) {
+        throw new Error('Location coordinates are required. Please enter a valid address.');
+      }
+
+      // Check if food type and category are selected
+      if (!donationForm.type) {
+        throw new Error('Please select a food type');
+      }
+
+      if (!donationForm.perishable) {
+        throw new Error('Please select a food category');
+      }
+
+      // Prepare form data
+      const formData = {
+        quantity,
+        foodType: donationForm.type,
+        category: donationForm.perishable,
+        expiryWindow,
+        pickupDeadline: expiryWindow,
+        imageUrl: imagePreview || null,
         location: {
           coordinates: [donationForm.locationCoords.lng, donationForm.locationCoords.lat],
         },
         notes: donationForm.notes,
       };
 
+      // Submit to API
       const response = await axios.post('http://localhost:5002/api/food-posts', formData, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      // Get the newly created food post
       const newFoodPost = response.data;
 
-      // Emit real-time event for new food post
+      // Emit socket event if connected
       if (connected && socket) {
         socket.emit('new-food-post', {
           _id: newFoodPost._id,
@@ -344,31 +730,40 @@ const DonorPanel = () => {
           pickupDeadline: formData.pickupDeadline,
           imageUrl: formData.imageUrl,
           location: formData.location,
-          notes: formData.notes
+          notes: formData.notes,
         });
       }
 
+      // Show success message
       toast.success('Donation posted successfully!');
+
+      // Refresh donations list
       await fetchDonations();
 
-      // Reset form
+      // Reset form but keep location and set default date/time
       setDonationForm({
         quantity: '',
         estimatedQuantity: '',
-        type: 'veg',
-        perishable: 'perishable',
-        expiryDate: '',
-        expiryTime: '',
+        type: 'veg', // Default to vegetarian
+        perishable: 'perishable', // Default to perishable
+        expiryDate: getTomorrowDate(),
+        expiryTime: getDefaultTime(),
         location: donationForm.location,
         locationCoords: donationForm.locationCoords,
         notes: '',
       });
-      setImagePreview(null);
+
+      // Clear editing state
+      setEditingDonationId(null);
+
+      // Clear image and errors
+      clearImage();
       setFormErrors({});
     } catch (error) {
       console.error('Error posting donation:', error);
-      toast.error('Failed to post donation');
-      setFormErrors({ submit: error.response?.data.message || 'Failed to post donation' });
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to post donation';
+      toast.error(errorMessage);
+      setFormErrors({ submit: errorMessage });
     } finally {
       setIsSubmitting(false);
     }
@@ -544,14 +939,7 @@ const DonorPanel = () => {
                 </div>
               </div>
               <div className="hidden md:flex md:items-center md:space-x-4">
-                <span className="text-gray-700 text-sm">Welcome, {user?.name || 'Donor'}</span>
-                <button
-                  onClick={handleLogout}
-                  className="ml-4 inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700 transform hover:scale-105 transition duration-200"
-                  aria-label="Logout from ZeroWaste"
-                >
-                  <LogOut size={14} className="mr-1" /> Logout
-                </button>
+                <span className="text-gray-700 text-sm">Donor Dashboard</span>
               </div>
               <div className="flex items-center md:hidden">
                 <button
@@ -568,17 +956,8 @@ const DonorPanel = () => {
             <div className="md:hidden border-t border-gray-200 bg-white">
               <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
                 <div className="px-3 py-2 text-sm font-medium text-gray-700">
-                  Welcome, {user?.name || 'Donor'}
+                  Donor Dashboard
                 </div>
-                <button
-                  onClick={handleLogout}
-                  className="block w-full text-left px-3 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transform hover:scale-105 transition duration-200"
-                  aria-label="Logout from ZeroWaste"
-                >
-                  <div className="flex items-center">
-                    <LogOut size={14} className="mr-2" /> Logout
-                  </div>
-                </button>
               </div>
             </div>
           )}
@@ -589,7 +968,30 @@ const DonorPanel = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Post Donation Form */}
             <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md">
-              <h2 className="text-lg font-medium text-gray-900 mb-4">Post Food Donation</h2>
+              <h2 className="text-lg font-medium text-gray-900 mb-4">
+                {editingDonationId ? 'Edit Food Donation' : 'Post Food Donation'}
+                {editingDonationId && (
+                  <button
+                    onClick={() => {
+                      setEditingDonationId(null);
+                      setDonationForm({
+                        quantity: '',
+                        estimatedQuantity: '',
+                        type: 'veg', // Default to vegetarian
+                        perishable: 'perishable', // Default to perishable
+                        expiryDate: getTomorrowDate(),
+                        expiryTime: getDefaultTime(),
+                        location: donationForm.location,
+                        locationCoords: donationForm.locationCoords,
+                        notes: '',
+                      });
+                    }}
+                    className="ml-2 text-xs text-green-600 hover:text-green-800"
+                  >
+                    (Cancel)
+                  </button>
+                )}
+              </h2>
               <form onSubmit={handleSubmitDonation} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Food Image</label>
@@ -604,10 +1006,7 @@ const DonorPanel = () => {
                           />
                           <button
                             type="button"
-                            onClick={() => {
-                              setImagePreview(null);
-                              setDonationForm((prev) => ({ ...prev, estimatedQuantity: '' }));
-                            }}
+                            onClick={clearImage}
                             className="absolute top-0 right-0 -mt-2 -mr-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transform hover:scale-110 transition duration-200"
                             aria-label="Remove uploaded image"
                           >
@@ -646,6 +1045,9 @@ const DonorPanel = () => {
                       AI estimating quantity...
                     </div>
                   )}
+                  {formErrors.image && (
+                    <p className="mt-1 text-xs text-red-500">{formErrors.image}</p>
+                  )}
                   {donationForm.estimatedQuantity && (
                     <div className="mt-2 flex items-center text-sm text-green-600">
                       <Check size={16} className="mr-1" />
@@ -674,39 +1076,59 @@ const DonorPanel = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label htmlFor="type" className="block text-sm font-medium text-gray-700 mb-1">
-                      Food Type
+                      Food Type <span className="text-xs text-gray-500">(Dietary category)</span>
                     </label>
                     <select
                       name="type"
                       id="type"
-                      value={donationForm.type}
-                      onChange={handleInputChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-green-500 focus:border-green-500"
+                      value={donationForm.type || 'veg'}
+                      onChange={(e) => {
+                        handleInputChange(e);
+                        updateFoodType(e.target.value);
+                      }}
+                      className={`w-full px-3 py-2 border ${formErrors.type ? 'border-red-300' : 'border-gray-300'} rounded-md focus:ring-green-500 focus:border-green-500`}
                     >
                       <option value="veg">Vegetarian</option>
                       <option value="non-veg">Non-Vegetarian</option>
                     </select>
+                    {formErrors.type ? (
+                      <p className="mt-1 text-xs text-red-500">{formErrors.type}</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Vegetarian food contains no meat products
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label htmlFor="perishable" className="block text-sm font-medium text-gray-700 mb-1">
-                      Category
+                      Food Category <span className="text-xs text-gray-500">(Shelf life)</span>
                     </label>
                     <select
                       name="perishable"
                       id="perishable"
-                      value={donationForm.perishable}
-                      onChange={handleInputChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-green-500 focus:border-green-500"
+                      value={donationForm.perishable || 'perishable'}
+                      onChange={(e) => {
+                        handleInputChange(e);
+                        updateFoodCategory(e.target.value);
+                      }}
+                      className={`w-full px-3 py-2 border ${formErrors.perishable ? 'border-red-300' : 'border-gray-300'} rounded-md focus:ring-green-500 focus:border-green-500`}
                     >
                       <option value="perishable">Perishable</option>
                       <option value="non-perishable">Non-Perishable</option>
                     </select>
+                    {formErrors.perishable ? (
+                      <p className="mt-1 text-xs text-red-500">{formErrors.perishable}</p>
+                    ) : (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Perishable items spoil quickly (fruits, dairy, cooked food)
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label htmlFor="expiryDate" className="block text-sm font-medium text-gray-700 mb-1">
-                      Expiry Date
+                      Expiry Date <span className="text-xs text-gray-500">(When food expires)</span>
                     </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -716,8 +1138,11 @@ const DonorPanel = () => {
                         type="date"
                         name="expiryDate"
                         id="expiryDate"
-                        value={donationForm.expiryDate}
-                        onChange={handleInputChange}
+                        value={donationForm.expiryDate || getTomorrowDate()}
+                        onChange={(e) => {
+                          handleInputChange(e);
+                          updateExpiryDate(e.target.value);
+                        }}
                         min={new Date().toISOString().split('T')[0]}
                         className={`w-full pl-10 px-3 py-2 border ${formErrors.expiryDate ? 'border-red-300' : 'border-gray-300'} rounded-md focus:ring-green-500 focus:border-green-500`}
                         required
@@ -726,10 +1151,11 @@ const DonorPanel = () => {
                     {formErrors.expiryDate && (
                       <p className="mt-1 text-xs text-red-500">{formErrors.expiryDate}</p>
                     )}
+                    <p className="mt-1 text-xs text-gray-500">Select today or a future date</p>
                   </div>
                   <div>
                     <label htmlFor="expiryTime" className="block text-sm font-medium text-gray-700 mb-1">
-                      Pickup By
+                      Pickup By <span className="text-xs text-gray-500">(Latest time for pickup)</span>
                     </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -739,8 +1165,11 @@ const DonorPanel = () => {
                         type="time"
                         name="expiryTime"
                         id="expiryTime"
-                        value={donationForm.expiryTime}
-                        onChange={handleInputChange}
+                        value={donationForm.expiryTime || getDefaultTime()}
+                        onChange={(e) => {
+                          handleInputChange(e);
+                          updateExpiryTime(e.target.value);
+                        }}
                         className={`w-full pl-10 px-3 py-2 border ${formErrors.expiryTime ? 'border-red-300' : 'border-gray-300'} rounded-md focus:ring-green-500 focus:border-green-500`}
                         required
                       />
@@ -748,6 +1177,7 @@ const DonorPanel = () => {
                     {formErrors.expiryTime && (
                       <p className="mt-1 text-xs text-red-500">{formErrors.expiryTime}</p>
                     )}
+                    <p className="mt-1 text-xs text-gray-500">If today, time must be in the future</p>
                   </div>
                 </div>
                 <div>
@@ -772,10 +1202,20 @@ const DonorPanel = () => {
                   {formErrors.location && (
                     <p className="mt-1 text-xs text-red-500">{formErrors.location}</p>
                   )}
-                  <p className="mt-1 text-xs text-gray-500 flex items-center">
-                    <MapPin size={12} className="mr-1" />
-                    Using your current location
-                  </p>
+                  <div className="mt-1 flex justify-between items-center">
+                    <p className="text-xs text-gray-500 flex items-center">
+                      <MapPin size={12} className="mr-1" />
+                      Enter your address or use current location
+                    </p>
+                    <button
+                      type="button"
+                      onClick={getUserLocation}
+                      className="text-xs text-green-600 hover:text-green-800 flex items-center"
+                    >
+                      <MapPin size={12} className="mr-1" />
+                      Get My Location
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-1">
@@ -786,7 +1226,10 @@ const DonorPanel = () => {
                     id="notes"
                     rows="3"
                     value={donationForm.notes}
-                    onChange={handleInputChange}
+                    onChange={(e) => {
+                      handleInputChange(e);
+                      updateNotes(e.target.value);
+                    }}
                     placeholder="Description of food, special instructions, etc."
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-green-500 focus:border-green-500"
                   ></textarea>
@@ -794,6 +1237,7 @@ const DonorPanel = () => {
                 {formErrors.submit && (
                   <p className="text-xs text-red-500">{formErrors.submit}</p>
                 )}
+
                 <button
                   type="submit"
                   disabled={isSubmitting}
@@ -805,7 +1249,7 @@ const DonorPanel = () => {
                   ) : (
                     <Send size={16} className="mr-2" />
                   )}
-                  Post Donation
+                  {editingDonationId ? 'Update Donation' : 'Post Donation'}
                 </button>
               </form>
             </div>
@@ -878,6 +1322,14 @@ const DonorPanel = () => {
                           </td>
                           <td className="px-4 py-4">
                             <div className="text-sm text-gray-500 max-w-xs truncate">{donation.notes}</div>
+                            {donation.status === 'pending' && (
+                              <button
+                                onClick={() => handleEditDonation(donation)}
+                                className="mt-2 inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                              >
+                                Edit
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}

@@ -1,6 +1,6 @@
 import './index.css'
 import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Home from './pages/Home'
 import AdminPanel from './pages/AdminPanel'
 import { Toaster } from "react-hot-toast";
@@ -9,10 +9,10 @@ import DonorPanel from './pages/DonorPanel';
 import ReceiverPanel from './pages/ReceiverPanel';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
-import { useContext } from 'react';
-import { AuthContext } from './context/AuthContext';
 
-// Protected route component
+// Note: We're keeping this component for future use with other protected routes
+// Currently not used as AdminPanel handles its own authentication
+/*
 const ProtectedRoute = ({ element, requiredRole }) => {
   const { loading, isAuthenticated, hasRole } = useContext(AuthContext);
 
@@ -27,16 +27,19 @@ const ProtectedRoute = ({ element, requiredRole }) => {
 
   // Check authentication and role
   if (!isAuthenticated) {
+    console.log('User not authenticated, redirecting to home');
     return React.createElement(Navigate, { to: "/", replace: true });
   }
 
   // If role is required, check if user has that role
   if (requiredRole && !hasRole(requiredRole)) {
+    console.log(`User does not have required role: ${requiredRole}, redirecting to home`);
     return React.createElement(Navigate, { to: "/", replace: true });
   }
 
   return element;
 };
+*/
 
 const AppRoutes = () => {
   return React.createElement(
@@ -48,12 +51,10 @@ const AppRoutes = () => {
       path: "/receiver",
       element: React.createElement(ReceiverPanel, null)
     }),
+    // Admin route
     React.createElement(Route, {
       path: "/admin",
-      element: React.createElement(ProtectedRoute, {
-        element: React.createElement(AdminPanel, null),
-        requiredRole: "admin"
-      })
+      element: React.createElement(AdminPanel, null)
     }),
     React.createElement(Route, {
       path: "/donor",

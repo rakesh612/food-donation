@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { AuthContext } from './AuthContext';
+import { toast } from 'react-hot-toast';
 
 export const SocketContext = createContext();
 
@@ -17,18 +18,47 @@ export const SocketProvider = ({ children }) => {
       const newSocket = io('http://localhost:5002', {
         auth: {
           token: localStorage.getItem('accessToken')
-        }
+        },
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
       });
 
       // Socket event handlers
       newSocket.on('connect', () => {
-        console.log('Socket connected');
+        console.log('Socket connected successfully');
         setConnected(true);
       });
 
       newSocket.on('disconnect', () => {
         console.log('Socket disconnected');
         setConnected(false);
+      });
+
+      newSocket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error.message);
+      });
+
+      newSocket.on('connect_timeout', () => {
+        console.error('Socket connection timeout');
+      });
+
+      newSocket.on('reconnect', (attemptNumber) => {
+        console.log(`Socket reconnected after ${attemptNumber} attempts`);
+        setConnected(true);
+      });
+
+      newSocket.on('reconnect_attempt', (attemptNumber) => {
+        console.log(`Socket reconnection attempt #${attemptNumber}`);
+      });
+
+      newSocket.on('reconnect_error', (error) => {
+        console.error('Socket reconnection error:', error.message);
+      });
+
+      newSocket.on('reconnect_failed', () => {
+        console.error('Socket reconnection failed');
       });
 
       newSocket.on('error', (error) => {
@@ -78,11 +108,20 @@ export const SocketProvider = ({ children }) => {
         data
       });
     });
+
+    socket.on('donation-fields-updated', (data) => {
+      addNotification({
+        type: 'donation-fields-updated',
+        message: 'Your donation details have been updated',
+        data
+      });
+    });
   };
 
   // Setup receiver-specific socket events
   const setupReceiverEvents = (socket) => {
     socket.on('new-food-post-available', (data) => {
+      console.log('New food post available:', data);
       addNotification({
         type: 'new-food-post',
         message: `New food donation available from ${data.donorName}`,
@@ -100,12 +139,52 @@ export const SocketProvider = ({ children }) => {
 
     socket.on('verification-status-changed', (data) => {
       if (data.isVerified) {
+        // Save verification status to localStorage
+        localStorage.setItem('receiverVerified', 'true');
+
+        // Show a more detailed notification
         addNotification({
           type: 'account-verified',
-          message: 'Your account has been verified',
+          message: 'Your account has been verified by an administrator',
           data
         });
+
+        // Show a toast notification
+        toast.success('Your account has been verified by an administrator! You can now access food donations.', {
+          duration: 6000,
+          icon: '✅'
+        });
+
+        // Reload the page to ensure verification status is applied
+        window.location.reload();
       }
+    });
+
+    socket.on('pickup-fields-updated', (data) => {
+      console.log('Donation fields updated:', data);
+      addNotification({
+        type: 'pickup-fields-updated',
+        message: 'A donation you accepted has been updated',
+        data
+      });
+    });
+
+    socket.on('food-post-status-changed', (data) => {
+      console.log('Food post status changed:', data);
+      addNotification({
+        type: 'status-changed',
+        message: `Food donation status changed to ${data.status}`,
+        data
+      });
+    });
+
+    socket.on('food-post-fields-updated', (data) => {
+      console.log('Food post fields updated:', data);
+      addNotification({
+        type: 'fields-updated',
+        message: 'Food donation details have been updated',
+        data
+      });
     });
   };
 
@@ -139,6 +218,14 @@ export const SocketProvider = ({ children }) => {
       addNotification({
         type: 'user-verified',
         message: `User ${data.name} has been verified`,
+        data
+      });
+    });
+
+    socket.on('food-post-fields-changed', (data) => {
+      addNotification({
+        type: 'fields-changed',
+        message: `Food donation details have been updated`,
         data
       });
     });
@@ -194,6 +281,30 @@ export const SocketProvider = ({ children }) => {
     }
   };
 
+  // Update food post fields (food type, category, expiry date, pickup time)
+  const updateFoodPostFields = (postId, fields) => {
+    if (socket && connected) {
+      console.log('Updating food post fields via socket:', { postId, ...fields });
+      socket.emit('update-food-post-fields', { postId, ...fields });
+      return true;
+    } else {
+      console.warn('Socket not connected, cannot update fields in real-time');
+      // Fallback to REST API if socket is not connected
+      try {
+        const token = localStorage.getItem('accessToken');
+        if (token) {
+          console.log('Attempting to update via REST API as fallback');
+          // This is a fallback mechanism - in a real app, you would implement the API call here
+          // For now, we'll just log the attempt
+          return false;
+        }
+      } catch (error) {
+        console.error('Failed to update fields:', error);
+      }
+      return false;
+    }
+  };
+
   // Verify a user (admin only)
   const verifyUser = (userId) => {
     if (socket && connected && user.role === 'admin') {
@@ -213,6 +324,7 @@ export const SocketProvider = ({ children }) => {
         joinFoodPostRoom,
         updateLocation,
         updateFoodPostStatus,
+        updateFoodPostFields,
         verifyUser
       }}
     >

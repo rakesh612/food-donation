@@ -84,7 +84,7 @@ const Home = () => {
                   onClick={() => navigate('/receiver')}
                   className="bg-white border-2 border-green-600 text-green-600 hover:bg-green-50 px-6 py-3 rounded-lg font-medium flex items-center gap-2 transition-all"
                 >
-                  ReveiverPanel
+                  Reveive Food
                 </motion.button>
               </div>
             </motion.div>
@@ -307,7 +307,8 @@ const Home = () => {
           >
             <p>Contact: +91-6304944744</p>
             <p>Email: <a href="mailto:rakeshcoc1to11@gmail.com" className="hover:text-gray-200 transition-colors">rakeshcoc1to11@gmail.com</a></p>
-            <p>Instagram: <a href="https://www.instagram.com/hanumath_rakesh" target="_blank" rel="noopener noreferrer" className="hover:text-gray-200 transition-colors">hanumath_rakeshThank you. Using. </a></p>
+            <p>Instagram: <a href="https://www.instagram.com/hanumath_rakesh" target="_blank" rel="noopener noreferrer" className="hover:text-gray-200 transition-colors">hanumath_rakesh <br></br>
+            Thank you. Using. </a></p>
           </motion.div>
         </div>
       </section>

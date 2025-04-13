@@ -4,16 +4,24 @@ import RefreshToken from '../models/RefreshToken.js';
 
 // Generate JWT
 const generateAccessToken = (user) => {
-  return jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
-  });
+  return jwt.sign(
+    { id: user._id, role: user.role },
+    process.env.JWT_SECRET || 'zerowaste_secure_jwt_secret_key_2023',
+    {
+      expiresIn: process.env.JWT_EXPIRES_IN || '1d',
+    }
+  );
 };
 
 // Generate Refresh Token
 const generateRefreshToken = (user) => {
-  return jwt.sign({ id: user._id }, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRES_IN,
-  });
+  return jwt.sign(
+    { id: user._id },
+    process.env.JWT_REFRESH_SECRET || 'zerowaste_secure_refresh_secret_key_2023',
+    {
+      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+    }
+  );
 };
 
 // Register User
@@ -50,7 +58,13 @@ const registerUser = async (req, res) => {
       message: 'User registered successfully',
       accessToken,
       refreshToken,
-      user: { id: user._id, email: user.email, role: user.role, name: user.name },
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        isVerified: user.isVerified || false
+      },
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -62,10 +76,22 @@ const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    console.log(`Login attempt for email: ${email}`);
+
     const user = await User.findOne({ email });
-    if (!user || !(await user.comparePassword(password))) {
+    if (!user) {
+      console.log(`User not found: ${email}`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+
+    // Check password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      console.log(`Invalid password for user: ${email}`);
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    console.log(`User authenticated: ${email}, role: ${user.role}`);
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
@@ -76,12 +102,20 @@ const loginUser = async (req, res) => {
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }).save();
 
+    // Send response with consistent user object structure
     res.json({
       accessToken,
       refreshToken,
-      user: { id: user._id, email: user.email, role: user.role, name: user.name },
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        isVerified: user.isVerified || false
+      },
     });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
@@ -100,7 +134,7 @@ const refreshToken = async (req, res) => {
       return res.status(401).json({ message: 'Invalid or expired refresh token' });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || 'zerowaste_secure_refresh_secret_key_2023');
     const user = await User.findById(decoded.id);
     if (!user) {
       return res.status(401).json({ message: 'User not found' });

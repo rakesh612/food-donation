@@ -9,6 +9,7 @@ import userRoutes from './routes/userRoutes.js';
 import foodPostRoutes from './routes/foodPostRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+// Admin setup routes removed for security
 import setupSocketIO from './socket/socketHandler.js';
 
 dotenv.config();
@@ -50,6 +51,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/food-posts', foodPostRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/reports', reportRoutes);
+// Admin setup routes removed for security
 
 // Make io accessible to our routes
 app.set('io', io);

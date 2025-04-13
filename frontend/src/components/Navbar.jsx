@@ -43,15 +43,12 @@ const Navbar = () => {
       const links = [];
       links.push(homeLink);
 
+      // Add appropriate dashboard link based on user role
       if (hasRole('donor')) {
         links.push(createNavLink('/donor', 'Donor Dashboard'));
-      }
-
-      if (hasRole('receiver')) {
+      } else if (hasRole('receiver')) {
         links.push(createNavLink('/receiver', 'Receiver Dashboard'));
-      }
-
-      if (hasRole('admin')) {
+      } else if (hasRole('admin')) {
         links.push(createNavLink('/admin', 'Admin Dashboard'));
       }
 
@@ -84,14 +81,54 @@ const Navbar = () => {
         homeLink,
         createNavLink('/donor', 'Donate Food'),
         createNavLink('/receiver', 'Receive Food'),
+        // Login dropdown
         React.createElement(
-          'button',
+          'div',
           {
-            onClick: () => navigate('/donor'),
-            className: 'flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700 transition duration-200'
+            className: 'relative group'
           },
-          React.createElement(LogIn, { size: 14, className: 'mr-1' }),
-          ' Login'
+          React.createElement(
+            'button',
+            {
+              className: 'flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700 transition duration-200'
+            },
+            React.createElement(LogIn, { size: 14, className: 'mr-1' }),
+            ' Login'
+          ),
+          React.createElement(
+            'div',
+            {
+              className: 'absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg overflow-hidden z-10 opacity-0 group-hover:opacity-100 invisible group-hover:visible transition-all duration-200 transform origin-top-right scale-95 group-hover:scale-100'
+            },
+            React.createElement(
+              'div',
+              { className: 'py-1' },
+              React.createElement(
+                'button',
+                {
+                  onClick: () => navigate('/donor'),
+                  className: 'block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                },
+                'Login as Donor'
+              ),
+              React.createElement(
+                'button',
+                {
+                  onClick: () => navigate('/receiver'),
+                  className: 'block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                },
+                'Login as Receiver'
+              ),
+              React.createElement(
+                'button',
+                {
+                  onClick: () => navigate('/admin'),
+                  className: 'block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                },
+                'Login as Admin'
+              )
+            )
+          )
         )
       ];
     }
@@ -105,15 +142,12 @@ const Navbar = () => {
       const links = [];
       links.push(homeLink);
 
+      // Add appropriate dashboard link based on user role
       if (hasRole('donor')) {
         links.push(createNavLink('/donor', 'Donor Dashboard', toggleMenu));
-      }
-
-      if (hasRole('receiver')) {
+      } else if (hasRole('receiver')) {
         links.push(createNavLink('/receiver', 'Receiver Dashboard', toggleMenu));
-      }
-
-      if (hasRole('admin')) {
+      } else if (hasRole('admin')) {
         links.push(createNavLink('/admin', 'Admin Dashboard', toggleMenu));
       }
 
@@ -150,17 +184,45 @@ const Navbar = () => {
         homeLink,
         createNavLink('/donor', 'Donate Food', toggleMenu),
         createNavLink('/receiver', 'Receive Food', toggleMenu),
-        React.createElement(
-          'button',
-          {
-            onClick: () => {
-              navigate('/donor');
-              toggleMenu();
+        // Login options
+        React.createElement('div', { className: 'mt-4 space-y-2' },
+          React.createElement('p', { className: 'text-sm text-gray-500 px-4' }, 'Login as:'),
+          React.createElement(
+            'button',
+            {
+              onClick: () => {
+                navigate('/donor');
+                toggleMenu();
+              },
+              className: 'flex items-center w-full px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 transition duration-200'
             },
-            className: 'flex items-center justify-center px-3 py-2 mt-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transition duration-200'
-          },
-          React.createElement(LogIn, { size: 14, className: 'mr-2' }),
-          ' Login'
+            React.createElement(LogIn, { size: 14, className: 'mr-2' }),
+            'Donor'
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => {
+                navigate('/receiver');
+                toggleMenu();
+              },
+              className: 'flex items-center w-full px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 transition duration-200'
+            },
+            React.createElement(LogIn, { size: 14, className: 'mr-2' }),
+            'Receiver'
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => {
+                navigate('/admin');
+                toggleMenu();
+              },
+              className: 'flex items-center w-full px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 transition duration-200'
+            },
+            React.createElement(LogIn, { size: 14, className: 'mr-2' }),
+            'Admin'
+          )
         )
       ];
     }

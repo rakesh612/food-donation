@@ -5,7 +5,10 @@ import {
   AlertTriangle,
   PlusCircle,
   CheckCircle,
-  RefreshCw
+  RefreshCw,
+  LogIn,
+  User,
+  Send
 } from "lucide-react";
 import { useSocket } from '../context/SocketContext';
 import { AuthContext } from '../context/AuthContext';
@@ -14,8 +17,16 @@ import { toast } from 'react-hot-toast';
 
 const AdminPanel = () => {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const { user } = useContext(AuthContext);
+  const { user, login, loading } = useContext(AuthContext);
   const { connected, notifications, verifyUser } = useSocket();
+
+  // Authentication States
+  const [authMode, setAuthMode] = useState('login');
+  const [localAuthError, setLocalAuthError] = useState('');
+  const [userData, setUserData] = useState({
+    email: '',
+    password: ''
+  });
 
   // Dashboard stats
   const [stats, setStats] = useState({
@@ -37,6 +48,16 @@ const AdminPanel = () => {
     users: false,
     fraud: false
   });
+
+  // NGO onboarding states
+  const [ngoData, setNgoData] = useState({
+    name: '',
+    email: '',
+    role: 'receiver'
+  });
+  const [isOnboarding, setIsOnboarding] = useState(false);
+  const [onboardError, setOnboardError] = useState('');
+  const [onboardSuccess, setOnboardSuccess] = useState('');
 
   // Fetch dashboard stats
   const fetchDashboardStats = async () => {
@@ -92,6 +113,103 @@ const AdminPanel = () => {
     }
   };
 
+  // Authentication functions
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setUserData((prev) => ({ ...prev, [name]: value }));
+    setLocalAuthError('');
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      console.log('Attempting admin login with:', userData.email);
+      const response = await login(userData.email, userData.password);
+
+      // Check if the user has the admin role
+      if (response && response.user && response.user.role !== 'admin') {
+        // Single clear message for wrong role
+        toast.error('Login failed. This panel is only for administrators. Please use the appropriate panel for your account type.');
+
+        // Clear local error to avoid duplicate messages
+        setLocalAuthError('');
+
+        // Force logout if the user is not an admin
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        window.location.reload();
+        return;
+      }
+
+      toast.success(`Welcome, Administrator ${response.user.name || ''}!`);
+
+      setUserData({ email: '', password: '' });
+    } catch (error) {
+      console.error('Admin login error:', error);
+      let errorMessage;
+      if (error.message === 'Invalid credentials') {
+        errorMessage = 'Invalid credentials. Please use an admin account.';
+      } else {
+        errorMessage = error.message || 'Login failed';
+      }
+      setLocalAuthError(errorMessage);
+      toast.error(errorMessage);
+    }
+  };
+
+  // Reset states when user changes
+  useEffect(() => {
+    if (!user) {
+      setActiveTab("dashboard");
+    }
+  }, [user]);
+
+  // NGO onboarding functions
+  const handleNGOInputChange = (e) => {
+    const { name, value } = e.target;
+    setNgoData(prev => ({ ...prev, [name]: value }));
+    setOnboardError('');
+    setOnboardSuccess('');
+  };
+
+  const handleOnboardNGO = async (e) => {
+    e.preventDefault();
+    setIsOnboarding(true);
+    setOnboardError('');
+    setOnboardSuccess('');
+
+    try {
+      const token = localStorage.getItem('accessToken');
+      const response = await axios.post(
+        'http://localhost:5002/api/users/onboard',
+        {
+          name: ngoData.name,
+          email: ngoData.email,
+          role: ngoData.role,
+          isVerified: true
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      setOnboardSuccess(`User ${ngoData.name} successfully onboarded! Temporary password: ${response.data.generatedPassword}`);
+      setNgoData({
+        name: '',
+        email: '',
+        role: 'receiver'
+      });
+
+      // Refresh users list
+      fetchUsers();
+    } catch (error) {
+      console.error('Error onboarding user:', error);
+      setOnboardError(error.response?.data?.message || 'Failed to onboard user');
+    } finally {
+      setIsOnboarding(false);
+    }
+  };
+
   // Handle user verification
   const handleVerifyUser = async (userId) => {
     try {
@@ -115,31 +233,7 @@ const AdminPanel = () => {
     }
   };
 
-  // Handle NGO onboarding
-  const handleOnboardNGO = async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const ngoData = {
-      name: formData.get('name'),
-      email: formData.get('email'),
-      role: 'receiver',
-      isVerified: true
-    };
-
-    try {
-      const token = localStorage.getItem('accessToken');
-      await axios.post('http://localhost:5002/api/users/onboard', ngoData, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      toast.success(`${ngoData.name} has been onboarded successfully`);
-      e.target.reset();
-      fetchUsers();
-    } catch (error) {
-      console.error('Error onboarding NGO:', error);
-      toast.error('Failed to onboard NGO');
-    }
-  };
+  // This function is now handled by the improved handleOnboardNGO above
 
   // Load data when tab changes
   useEffect(() => {
@@ -243,6 +337,8 @@ const AdminPanel = () => {
                   <input
                     type="text"
                     name="name"
+                    value={ngoData?.name || ''}
+                    onChange={handleNGOInputChange}
                     required
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
                   />
@@ -252,16 +348,47 @@ const AdminPanel = () => {
                   <input
                     type="email"
                     name="email"
+                    value={ngoData?.email || ''}
+                    onChange={handleNGOInputChange}
                     required
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Role</label>
+                  <select
+                    name="role"
+                    value={ngoData?.role || 'receiver'}
+                    onChange={handleNGOInputChange}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
+                    required
+                  >
+                    <option value="receiver">Receiver (NGO)</option>
+                    <option value="volunteer">Volunteer</option>
+                  </select>
+                </div>
                 <button
                   type="submit"
                   className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                  disabled={isOnboarding}
                 >
-                  <PlusCircle size={16} className="mr-2" /> Add NGO
+                  {isOnboarding ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <PlusCircle size={16} className="mr-2" /> Add NGO
+                    </>
+                  )}
                 </button>
+                {onboardError && (
+                  <div className="p-2 bg-red-100 text-red-700 rounded-md text-sm">{onboardError}</div>
+                )}
+                {onboardSuccess && (
+                  <div className="p-2 bg-green-100 text-green-700 rounded-md text-sm">{onboardSuccess}</div>
+                )}
               </form>
             </div>
 
@@ -377,29 +504,128 @@ const AdminPanel = () => {
         return (
           <div className="p-4 bg-white rounded-2xl shadow">
             <h3 className="text-xl font-semibold mb-4 text-green-800">Onboard New NGO / Volunteer</h3>
-            <form className="space-y-4">
-              <input
-                type="text"
-                placeholder="Organization / Volunteer Name"
-                className="w-full px-4 py-3 border rounded-lg"
-              />
-              <input
-                type="email"
-                placeholder="Email"
-                className="w-full px-4 py-3 border rounded-lg"
-              />
+            <form className="space-y-4" onSubmit={handleOnboardNGO}>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Organization / Volunteer Name</label>
+                <input
+                  type="text"
+                  name="name"
+                  value={ngoData?.name || ''}
+                  onChange={handleNGOInputChange}
+                  className="w-full px-4 py-3 border rounded-lg"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  name="email"
+                  value={ngoData?.email || ''}
+                  onChange={handleNGOInputChange}
+                  className="w-full px-4 py-3 border rounded-lg"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select
+                  name="role"
+                  value={ngoData?.role || 'receiver'}
+                  onChange={handleNGOInputChange}
+                  className="w-full px-4 py-3 border rounded-lg"
+                  required
+                >
+                  <option value="receiver">Receiver (NGO)</option>
+                  <option value="volunteer">Volunteer</option>
+                </select>
+              </div>
               <button
                 type="submit"
-                className="bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 transition"
+                className="bg-green-600 text-white px-6 py-3 rounded-xl hover:bg-green-700 transition flex items-center justify-center"
+                disabled={isOnboarding}
               >
-                Add & Verify
+                {isOnboarding ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Processing...
+                  </>
+                ) : (
+                  <>Add & Verify</>
+                )}
               </button>
+              {onboardError && (
+                <div className="p-2 bg-red-100 text-red-700 rounded-md text-sm">{onboardError}</div>
+              )}
+              {onboardSuccess && (
+                <div className="p-2 bg-green-100 text-green-700 rounded-md text-sm">{onboardSuccess}</div>
+              )}
             </form>
           </div>
         );
       default:
         return null;
     }
+  };
+
+  // Admin Login Form
+  const renderAdminLoginForm = () => {
+    return (
+      <div className="min-h-screen bg-green-50 flex items-center justify-center px-4">
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full transform transition-all duration-500 animate-fadeIn">
+          <h2 className="text-2xl font-bold text-green-700 mb-6 text-center">
+            Admin Login
+          </h2>
+          {localAuthError && (
+            <div className="mb-4 p-2 bg-red-100 text-red-700 rounded-md text-sm">{localAuthError}</div>
+          )}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                Admin Email
+              </label>
+              <input
+                type="email"
+                name="email"
+                id="email"
+                value={userData.email}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2 border border-gray-200 rounded-md focus:ring-2 focus:ring-green-300 focus:border-green-400 transition-colors duration-200"
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                Password
+              </label>
+              <input
+                type="password"
+                name="password"
+                id="password"
+                value={userData.password}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2 border border-gray-200 rounded-md focus:ring-2 focus:ring-green-300 focus:border-green-400 transition-colors duration-200"
+                required
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className={`w-full bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600 transition duration-300 flex items-center justify-center transform hover:scale-105 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+              aria-label="Login to Admin Panel"
+            >
+              {loading ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+              ) : (
+                <LogIn size={16} className="mr-2" />
+              )}
+              Login
+            </button>
+
+          </form>
+        </div>
+      </div>
+    );
   };
 
   const tabs = [
@@ -409,10 +635,17 @@ const AdminPanel = () => {
     { id: "onboard", label: "Onboard NGO", icon: <PlusCircle className="w-5 h-5" /> },
   ];
 
+  // Check if user is authenticated and has admin role
+  if (!user || user.role !== 'admin') {
+    return renderAdminLoginForm();
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-green-100 p-6">
       <div className="max-w-6xl mx-auto space-y-8">
-        <h1 className="text-4xl font-bold text-green-800 text-center">Admin Dashboard</h1>
+        <div className="flex justify-between items-center">
+          <h1 className="text-4xl font-bold text-green-800">Admin Dashboard</h1>
+        </div>
 
         <div className="flex flex-wrap gap-4 justify-center">
           {tabs.map((tab) => (

@@ -60,28 +60,78 @@ const getNearbyFoodPosts = async (req, res) => {
   const { latitude, longitude, maxDistance = 5000 } = req.query;
 
   try {
-    const foodPosts = await FoodPost.find({
+    console.log(`Searching for food posts near [${latitude}, ${longitude}] with max distance ${maxDistance}m`);
+
+    // Validate coordinates
+    const parsedLat = parseFloat(latitude);
+    const parsedLng = parseFloat(longitude);
+    const parsedMaxDistance = parseFloat(maxDistance);
+
+    if (isNaN(parsedLat) || isNaN(parsedLng)) {
+      return res.status(400).json({ message: 'Invalid coordinates' });
+    }
+
+    // Find all pending food posts within the maxDistance
+    const nearbyPosts = await FoodPost.find({
       status: 'pending',
       location: {
         $near: {
           $geometry: {
             type: 'Point',
-            coordinates: [parseFloat(longitude), parseFloat(latitude)],
+            coordinates: [parsedLng, parsedLat]
           },
-          $maxDistance: parseFloat(maxDistance),
-        },
-      },
-    }).populate('donorId', 'name email phone');
+          $maxDistance: parsedMaxDistance
+        }
+      }
+    })
+    .populate('donorId', 'name email phone')
+    .sort({ createdAt: -1 }); // Sort by newest first
 
-    res.json(foodPosts);
+    console.log(`Found ${nearbyPosts.length} nearby posts within ${maxDistance}m`);
+
+    // Add distance to each post
+    const postsWithDistance = nearbyPosts.map(post => {
+      const postObj = post.toObject();
+      postObj.distance = post.location.coordinates ? 
+        calculateDistance(
+          parsedLat,
+          parsedLng,
+          post.location.coordinates[1],
+          post.location.coordinates[0]
+        ) : null;
+      return postObj;
+    });
+
+    // Sort by distance
+    postsWithDistance.sort((a, b) => a.distance - b.distance);
+
+    res.json(postsWithDistance);
   } catch (error) {
+    console.error('Error in getNearbyFoodPosts:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
+};
+
+// Helper function to calculate distance between two points using Haversine formula
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3; // Earth's radius in meters
+  const φ1 = lat1 * Math.PI/180;
+  const φ2 = lat2 * Math.PI/180;
+  const Δφ = (lat2-lat1) * Math.PI/180;
+  const Δλ = (lon2-lon1) * Math.PI/180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+          Math.cos(φ1) * Math.cos(φ2) *
+          Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c; // Distance in meters
 };
 
 // Accept Food Post (Receiver)
 const acceptFoodPost = async (req, res) => {
   const { postId } = req.params;
+  const { estimatedPickupTime } = req.body;
 
   try {
     const foodPost = await FoodPost.findById(postId);
@@ -91,10 +141,13 @@ const acceptFoodPost = async (req, res) => {
 
     foodPost.status = 'accepted';
     foodPost.receiverId = req.user._id;
+    foodPost.pickupDetails.acceptedAt = Date.now();
+    foodPost.pickupDetails.estimatedPickupTime = estimatedPickupTime ? new Date(estimatedPickupTime) : null;
     await foodPost.save();
 
     // Get receiver information for real-time notification
-    const receiver = await User.findById(req.user._id).select('name');
+    const receiver = await User.findById(req.user._id).select('name email phone');
+    const donor = await User.findById(foodPost.donorId).select('name email phone');
 
     // Get Socket.IO instance
     const io = req.app.get('io');
@@ -106,7 +159,14 @@ const acceptFoodPost = async (req, res) => {
         status: foodPost.status,
         receiverId: foodPost.receiverId,
         receiverName: receiver.name,
-        updatedAt: foodPost.updatedAt
+        receiverEmail: receiver.email,
+        receiverPhone: receiver.phone,
+        donorName: donor.name,
+        donorEmail: donor.email,
+        donorPhone: donor.phone,
+        estimatedPickupTime: foodPost.pickupDetails.estimatedPickupTime,
+        updatedAt: foodPost.updatedAt,
+        statusHistory: foodPost.statusHistory
       };
 
       // Notify donor
@@ -136,7 +196,13 @@ const confirmPickup = async (req, res) => {
     }
 
     foodPost.status = 'picked';
+    foodPost.pickupDetails.pickedAt = Date.now();
+    foodPost.pickupDetails.actualPickupTime = Date.now();
     await foodPost.save();
+
+    // Get receiver and donor information for real-time notification
+    const receiver = await User.findById(req.user._id).select('name email phone');
+    const donor = await User.findById(foodPost.donorId).select('name email phone');
 
     // Get Socket.IO instance
     const io = req.app.get('io');
@@ -146,66 +212,19 @@ const confirmPickup = async (req, res) => {
       const updateData = {
         postId: foodPost._id,
         status: foodPost.status,
-        updatedAt: foodPost.updatedAt
+        receiverName: receiver.name,
+        receiverEmail: receiver.email,
+        receiverPhone: receiver.phone,
+        donorName: donor.name,
+        donorEmail: donor.email,
+        donorPhone: donor.phone,
+        actualPickupTime: foodPost.pickupDetails.actualPickupTime,
+        updatedAt: foodPost.updatedAt,
+        statusHistory: foodPost.statusHistory
       };
 
       // Notify donor
       io.to(`user:${foodPost.donorId}`).emit('donation-picked', updateData);
 
       // Notify all users in the food post room
-      io.to(`food-post:${postId}`).emit('food-post-updated', updateData);
-
-      // Notify admins
-      io.to('admin').emit('food-post-status-changed', updateData);
-    }
-
-    res.json({ message: 'Pickup confirmed', foodPost });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-};
-
-// Verify Delivery (Admin)
-const verifyDelivery = async (req, res) => {
-  const { postId } = req.params;
-
-  try {
-    const foodPost = await FoodPost.findById(postId);
-    if (!foodPost || foodPost.status !== 'picked') {
-      return res.status(400).json({ message: 'Food post not in picked status' });
-    }
-
-    foodPost.status = 'verified';
-    await foodPost.save();
-
-    // Get Socket.IO instance
-    const io = req.app.get('io');
-
-    // Emit real-time event to donor, receiver and admin
-    if (io) {
-      const updateData = {
-        postId: foodPost._id,
-        status: foodPost.status,
-        updatedAt: foodPost.updatedAt
-      };
-
-      // Notify donor
-      io.to(`user:${foodPost.donorId}`).emit('donation-verified', updateData);
-
-      // Notify receiver
-      io.to(`user:${foodPost.receiverId}`).emit('pickup-verified', updateData);
-
-      // Notify all users in the food post room
-      io.to(`food-post:${postId}`).emit('food-post-updated', updateData);
-
-      // Notify admins
-      io.to('admin').emit('food-post-status-changed', updateData);
-    }
-
-    res.json({ message: 'Delivery verified', foodPost });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-};
-
-export { createFoodPost, getNearbyFoodPosts, acceptFoodPost, confirmPickup, verifyDelivery };
+      io.to(`

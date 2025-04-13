@@ -77,18 +77,32 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
+      console.log('Fetching user profile with token');
+
       // Use direct axios call instead of api instance
       const res = await axios.get('http://localhost:5002/api/users/profile', {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      setUser(res.data);
+      console.log('User profile response:', res.data);
+
+      // Make sure user object has the correct structure
+      const userData = {
+        id: res.data.id || res.data._id,
+        email: res.data.email,
+        name: res.data.name,
+        role: res.data.role,
+        isVerified: res.data.isVerified
+      };
+
+      setUser(userData);
     } catch (error) {
-      console.error('Error fetching user profile:', error);
+      console.error('Error fetching user profile:', error.response?.data || error.message);
       // Only clear tokens if it's an auth error
       if (error.response?.status === 401) {
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
+        setUser(null);
       }
     } finally {
       setLoading(false);
@@ -104,20 +118,36 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       setAuthError(null);
+      console.log('Attempting login with:', email);
+
       // Use direct axios call instead of api instance
       const res = await axios.post('http://localhost:5002/api/auth/login', {
         email,
         password,
       });
 
+      console.log('Login response:', res.data);
+
       localStorage.setItem('accessToken', res.data.accessToken);
       localStorage.setItem('refreshToken', res.data.refreshToken);
-      setUser(res.data.user);
-      toast.success('Login successful!');
+
+      // Make sure user object has the correct structure
+      const userData = {
+        id: res.data.user.id || res.data.user._id,
+        email: res.data.user.email,
+        name: res.data.user.name,
+        role: res.data.user.role || 'user' // Default to 'user' if role is not provided
+      };
+
+      // Log the user data for debugging
+      console.log('User data after login:', userData);
+
+      setUser(userData);
+      toast.success(`Login successful as ${userData.role}!`);
       return res.data;
     } catch (error) {
-      console.error('Login error:', error);
-      const errorMessage = error.response?.data?.message || 'Login failed';
+      console.error('Login error details:', error.response?.data || error.message);
+      const errorMessage = error.response?.data?.message || 'Login failed. Please check your credentials.';
       setAuthError(errorMessage);
       toast.error(errorMessage);
       throw error.response?.data || { message: errorMessage };
@@ -128,6 +158,8 @@ export const AuthProvider = ({ children }) => {
   const register = async (data) => {
     try {
       setAuthError(null);
+      console.log('Attempting registration with:', data.email);
+
       // Use direct axios call instead of api instance
       const res = await axios.post('http://localhost:5002/api/auth/register', data, {
         headers: {
@@ -135,14 +167,25 @@ export const AuthProvider = ({ children }) => {
         }
       });
 
+      console.log('Registration response:', res.data);
+
       localStorage.setItem('accessToken', res.data.accessToken);
       localStorage.setItem('refreshToken', res.data.refreshToken);
-      setUser(res.data.user);
+
+      // Make sure user object has the correct structure
+      const userData = {
+        id: res.data.user.id || res.data.user._id,
+        email: res.data.user.email,
+        name: res.data.user.name,
+        role: res.data.user.role
+      };
+
+      setUser(userData);
       toast.success('Registration successful!');
       return res.data;
     } catch (error) {
-      console.error('Registration error:', error);
-      const errorMessage = error.response?.data?.message || 'Registration failed';
+      console.error('Registration error details:', error.response?.data || error.message);
+      const errorMessage = error.response?.data?.message || 'Registration failed. Please try again.';
       setAuthError(errorMessage);
       toast.error(errorMessage);
       throw error.response?.data || { message: errorMessage };
@@ -162,6 +205,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
+      localStorage.removeItem('receiverVerified'); // Clear verification status
       setUser(null);
       toast.success('Logged out successfully');
     }
@@ -169,6 +213,7 @@ export const AuthProvider = ({ children }) => {
 
   // Check if user has a specific role
   const hasRole = useCallback((role) => {
+    console.log('Checking role:', role, 'User:', user);
     return user && user.role === role;
   }, [user]);
 

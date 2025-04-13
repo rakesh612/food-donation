@@ -119,6 +119,68 @@ const setupSocketIO = (io) => {
       }
     });
 
+    // Handle food post field updates (food type, category, expiry date, pickup time, notes)
+    socket.on('update-food-post-fields', async (data) => {
+      const { postId, foodType, category, expiryWindow, pickupDeadline, notes } = data;
+      try {
+        const foodPost = await FoodPost.findById(postId);
+        if (!foodPost) {
+          socket.emit('error', { message: 'Food post not found' });
+          return;
+        }
+
+        // Check if user is the donor of this post
+        if (foodPost.donorId.toString() !== socket.userId) {
+          socket.emit('error', { message: 'Not authorized to update this food post' });
+          return;
+        }
+
+        // Update food post fields
+        if (foodType) foodPost.foodType = foodType;
+        if (category) foodPost.category = category;
+        if (expiryWindow) foodPost.expiryWindow = new Date(expiryWindow);
+        if (pickupDeadline) foodPost.pickupDeadline = new Date(pickupDeadline);
+        if (notes !== undefined) foodPost.notes = notes;
+
+        foodPost.updatedAt = Date.now();
+        await foodPost.save();
+
+        console.log(`Food post ${postId} updated with fields:`, { foodType, category, expiryWindow, pickupDeadline, notes });
+
+        // Prepare update data
+        const updateData = {
+          postId,
+          foodType: foodPost.foodType,
+          category: foodPost.category,
+          expiryWindow: foodPost.expiryWindow,
+          pickupDeadline: foodPost.pickupDeadline,
+          notes: foodPost.notes,
+          updatedAt: foodPost.updatedAt
+        };
+
+        // Notify all users in the food post room
+        io.to(`food-post:${postId}`).emit('food-post-fields-updated', updateData);
+
+        // Notify donor
+        if (connectedUsers.has(foodPost.donorId.toString())) {
+          connectedUsers.get(foodPost.donorId.toString()).emit('donation-fields-updated', updateData);
+        }
+
+        // Notify receiver if assigned
+        if (foodPost.receiverId && connectedUsers.has(foodPost.receiverId.toString())) {
+          connectedUsers.get(foodPost.receiverId.toString()).emit('pickup-fields-updated', updateData);
+        }
+
+        // Notify admins
+        io.to('admin').emit('food-post-fields-changed', updateData);
+      } catch (error) {
+        console.error('Error updating food post fields:', error);
+        socket.emit('error', { message: 'Error updating food post fields' });
+      }
+    });
+
+
+
     // Handle new food post creation
     socket.on('new-food-post', async (postData) => {
       try {
@@ -199,6 +261,43 @@ const setupSocketIO = (io) => {
       } catch (error) {
         console.error('Error verifying user:', error);
         socket.emit('error', { message: 'Error verifying user' });
+      }
+    });
+
+    // Handle new food post creation
+    socket.on('new-food-post', async (data) => {
+      try {
+        // Get user name for notifications
+        const user = await User.findById(socket.userId);
+        const userName = user ? user.name : 'Unknown User';
+
+        // Prepare notification data
+        const notificationData = {
+          ...data,
+          donorName: userName,
+          timestamp: new Date().toISOString()
+        };
+
+        console.log('New food post data:', notificationData);
+
+        // Notify admins
+        io.to('admin').emit('new-food-post-created', notificationData);
+        console.log('Notified admins about new food post');
+
+        // Notify all receivers
+        io.to('receiver').emit('new-food-post-available', notificationData);
+        console.log('Notified receivers about new food post');
+
+        // Broadcast to all connected clients for testing
+        io.emit('broadcast-food-post', {
+          message: 'New food post available',
+          data: notificationData
+        });
+
+        console.log(`New food post created by ${userName}, notifying admins and receivers`);
+      } catch (error) {
+        console.error('Error handling new food post:', error);
+        socket.emit('error', { message: 'Error handling new food post' });
       }
     });
 

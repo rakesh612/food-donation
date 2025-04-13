@@ -72,12 +72,50 @@ const foodPostSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  statusHistory: [{
+    status: {
+      type: String,
+      enum: ['pending', 'accepted', 'picked', 'verified', 'expired'],
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    notes: String,
+  }],
+  pickupDetails: {
+    acceptedAt: Date,
+    pickedAt: Date,
+    verifiedAt: Date,
+    estimatedPickupTime: Date,
+    actualPickupTime: Date,
+  },
+  distance: {
+    type: Number,
+    default: null,
+  },
 });
 
 foodPostSchema.index({ location: '2dsphere' });
 
 foodPostSchema.pre('save', function (next) {
   this.updatedAt = Date.now();
+  
+  if (this.isModified('status')) {
+    if (!this.statusHistory) {
+      this.statusHistory = [];
+    }
+    this.statusHistory.push({
+      status: this.status,
+      updatedAt: Date.now(),
+      updatedBy: this.receiverId || this.donorId,
+    });
+  }
+  
   next();
 });
 
