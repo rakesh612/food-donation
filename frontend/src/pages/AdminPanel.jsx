@@ -248,31 +248,72 @@ const AdminPanel = () => {
     }
   }, [activeTab, user]);
 
+  // Set up periodic refresh for real-time data
+  useEffect(() => {
+    if (user && user.role === 'admin' && connected) {
+      // Set up interval to refresh data every 30 seconds
+      const intervalId = setInterval(() => {
+        console.log('Auto-refreshing admin dashboard data...');
+        if (activeTab === 'dashboard') {
+          fetchDashboardStats();
+        } else if (activeTab === 'users') {
+          fetchUsers();
+        } else if (activeTab === 'fraud') {
+          fetchFlaggedPosts();
+        }
+      }, 30000); // Every 30 seconds
+
+      // Clean up interval on unmount
+      return () => clearInterval(intervalId);
+    }
+  }, [user, connected, activeTab]);
+
+  // Real-time activity feed
+  const [activityFeed, setActivityFeed] = useState([]);
+  const [lastUpdateTime, setLastUpdateTime] = useState(new Date());
+
   // Handle real-time notifications
   useEffect(() => {
     if (notifications && notifications.length > 0) {
       const latestNotification = notifications[0];
 
       if (!latestNotification.read) {
+        // Add to activity feed
+        const activityItem = {
+          id: Date.now(),
+          time: new Date(),
+          type: latestNotification.type,
+          message: latestNotification.message,
+          data: latestNotification.data
+        };
+
+        setActivityFeed(prev => [activityItem, ...prev.slice(0, 19)]); // Keep last 20 activities
+        setLastUpdateTime(new Date());
+
         // Show toast notification based on type
         switch (latestNotification.type) {
           case 'new-food-post-created':
-            toast.info('New food donation posted');
-            if (activeTab === 'dashboard') fetchDashboardStats();
+            toast.info(`New food donation posted by ${latestNotification.data?.donorName || 'a donor'}`);
+            // Always update dashboard stats for any notification
+            fetchDashboardStats();
             break;
           case 'food-post-status-changed':
-            toast.info(`Food post status changed to ${latestNotification.data.status}`);
-            if (activeTab === 'dashboard') fetchDashboardStats();
+            toast.info(`Food post status changed to ${latestNotification.data?.status}`);
+            fetchDashboardStats();
             break;
           case 'food-post-expired':
             toast.warning('Food post has expired');
+            fetchDashboardStats();
             if (activeTab === 'fraud') fetchFlaggedPosts();
             break;
           case 'user-verified':
-            toast.success(`User ${latestNotification.data.name} has been verified`);
+            toast.success(`User ${latestNotification.data?.name || 'Unknown'} has been verified`);
+            fetchDashboardStats();
             if (activeTab === 'users') fetchUsers();
             break;
           default:
+            // For any other notification, refresh dashboard stats
+            fetchDashboardStats();
             break;
         }
       }
@@ -284,31 +325,111 @@ const AdminPanel = () => {
       case "dashboard":
         return (
           <div className="grid gap-6 md:grid-cols-2">
-            <div className="bg-green-100 p-6 rounded-2xl shadow">
-              <div className="flex justify-between items-start">
-                <h3 className="text-lg font-semibold text-green-800">Food Saved</h3>
+            {/* Stats Cards */}
+            <div className="col-span-2 flex justify-between items-center mb-2">
+              <h2 className="text-xl font-bold text-gray-800">Dashboard Statistics</h2>
+              <div className="flex items-center">
+                <span className="text-xs text-gray-500 mr-2">
+                  Last updated: {lastUpdateTime.toLocaleTimeString()}
+                </span>
                 <button
                   onClick={fetchDashboardStats}
-                  className="text-xs text-green-700 hover:text-green-900 flex items-center"
+                  className="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-2 py-1 rounded flex items-center"
                   disabled={isLoading.dashboard}
                 >
                   <RefreshCw size={14} className={`mr-1 ${isLoading.dashboard ? 'animate-spin' : ''}`} />
-                  Refresh
+                  Refresh All
                 </button>
               </div>
+            </div>
+
+            <div className="bg-green-100 p-6 rounded-2xl shadow relative overflow-hidden">
+              <div className="flex justify-between items-start">
+                <h3 className="text-lg font-semibold text-green-800">Food Saved</h3>
+                {connected && <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>}
+              </div>
               <p className="text-3xl font-bold mt-2">{stats.foodSaved || 0} kg</p>
+              <div className="absolute bottom-0 right-0 w-16 h-16 opacity-10">
+                <BarChart className="w-full h-full text-green-800" />
+              </div>
             </div>
-            <div className="bg-green-100 p-6 rounded-2xl shadow">
-              <h3 className="text-lg font-semibold text-green-800">People Served</h3>
-              <p className="text-3xl font-bold mt-2">{stats.peopleServed || 0}+</p>
+
+            <div className="bg-blue-100 p-6 rounded-2xl shadow relative overflow-hidden">
+              <div className="flex justify-between items-start">
+                <h3 className="text-lg font-semibold text-blue-800">People Served</h3>
+                {connected && <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>}
+              </div>
+              <p className="text-3xl font-bold mt-2">{stats.peopleServed || 0}</p>
+              <div className="absolute bottom-0 right-0 w-16 h-16 opacity-10">
+                <Users className="w-full h-full text-blue-800" />
+              </div>
             </div>
-            <div className="bg-green-100 p-6 rounded-2xl shadow">
-              <h3 className="text-lg font-semibold text-green-800">CO₂ Emission Prevented</h3>
+
+            <div className="bg-purple-100 p-6 rounded-2xl shadow relative overflow-hidden">
+              <div className="flex justify-between items-start">
+                <h3 className="text-lg font-semibold text-purple-800">CO₂ Emissions Prevented</h3>
+                {connected && <span className="inline-block w-2 h-2 bg-purple-500 rounded-full animate-pulse"></span>}
+              </div>
               <p className="text-3xl font-bold mt-2">{stats.emissionsPrevented || 0} tons</p>
+              <div className="absolute bottom-0 right-0 w-16 h-16 opacity-10">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-full h-full text-purple-800" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M2 22h20M12 2v6M12 8l4 4M12 8l-4 4" />
+                </svg>
+              </div>
             </div>
-            <div className="bg-green-100 p-6 rounded-2xl shadow">
-              <h3 className="text-lg font-semibold text-green-800">Active Posts</h3>
+
+            <div className="bg-yellow-100 p-6 rounded-2xl shadow relative overflow-hidden">
+              <div className="flex justify-between items-start">
+                <h3 className="text-lg font-semibold text-yellow-800">Active Donations</h3>
+                {connected && <span className="inline-block w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>}
+              </div>
               <p className="text-3xl font-bold mt-2">{stats.activePosts || 0}</p>
+              <div className="absolute bottom-0 right-0 w-16 h-16 opacity-10">
+                <PlusCircle className="w-full h-full text-yellow-800" />
+              </div>
+            </div>
+
+            {/* Real-time Activity Feed */}
+            <div className="col-span-2 bg-white p-6 rounded-2xl shadow mt-4">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800">Real-time Activity Feed</h3>
+                <div className="flex items-center">
+                  {connected ? (
+                    <span className="text-xs text-green-600 flex items-center">
+                      <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></span>
+                      Live
+                    </span>
+                  ) : (
+                    <span className="text-xs text-red-600 flex items-center">
+                      <span className="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>
+                      Disconnected
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {activityFeed.length > 0 ? (
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
+                  {activityFeed.map(activity => (
+                    <div key={activity.id} className="border-l-4 pl-3 py-2 border-blue-400 bg-blue-50 rounded-r">
+                      <div className="flex justify-between items-start">
+                        <span className="font-medium text-blue-800">{activity.message}</span>
+                        <span className="text-xs text-gray-500">{new Date(activity.time).toLocaleTimeString()}</span>
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">
+                        {activity.type === 'new-food-post-created' && 'New food donation posted'}
+                        {activity.type === 'food-post-status-changed' && `Status changed to ${activity.data?.status || 'unknown'}`}
+                        {activity.type === 'user-verified' && 'User verification'}
+                        {activity.type === 'post-expired' && 'Food post expired'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No activity recorded yet. Activities will appear here in real-time.</p>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -316,17 +437,30 @@ const AdminPanel = () => {
         return (
           <div className="p-4 bg-white rounded-2xl shadow">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold text-green-700">User Management</h3>
-              <button
-                onClick={fetchUsers}
-                className="text-xs text-green-700 hover:text-green-900 flex items-center"
-                disabled={isLoading.users}
-              >
-                <RefreshCw size={14} className={`mr-1 ${isLoading.users ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
+              <div>
+                <h3 className="text-xl font-semibold text-green-700">User Management</h3>
+                <p className="text-sm text-gray-600">View and moderate registered donors, receivers, and volunteers.</p>
+              </div>
+              <div className="flex items-center">
+                <span className="text-xs text-gray-500 mr-2">
+                  Last updated: {lastUpdateTime.toLocaleTimeString()}
+                </span>
+                <button
+                  onClick={fetchUsers}
+                  className="text-xs bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 rounded flex items-center"
+                  disabled={isLoading.users}
+                >
+                  <RefreshCw size={14} className={`mr-1 ${isLoading.users ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
             </div>
-            <p>View and moderate registered donors, receivers, and volunteers.</p>
+            {connected && (
+              <div className="mb-4 flex items-center">
+                <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
+                <span className="text-xs text-green-600">Real-time updates active</span>
+              </div>
+            )}
 
             {/* Add NGO Form */}
             <div className="mt-6 p-4 bg-green-50 rounded-lg">
@@ -404,7 +538,7 @@ const AdminPanel = () => {
                   <li className="p-4 bg-gray-50 rounded text-center text-gray-500">No users found</li>
                 ) : (
                   users.map(user => (
-                    <li key={user._id} className="p-3 bg-green-50 rounded shadow">
+                    <li key={user._id} className={`p-3 rounded shadow transition-all duration-300 ${user.isVerified ? 'bg-green-50' : 'bg-yellow-50'}`}>
                       <div className="flex justify-between items-center">
                         <div>
                           <span className="font-medium">{user.name}</span>
@@ -415,7 +549,8 @@ const AdminPanel = () => {
                             </span>
                           ) : (
                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                              Pending
+                              <span className="inline-block w-2 h-2 bg-yellow-500 rounded-full animate-pulse mr-1"></span>
+                              Pending Verification
                             </span>
                           )}
                         </div>
@@ -447,17 +582,30 @@ const AdminPanel = () => {
         return (
           <div className="p-4 bg-white rounded-2xl shadow">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold text-red-600">Flagged / Expired Posts</h3>
-              <button
-                onClick={fetchFlaggedPosts}
-                className="text-xs text-red-700 hover:text-red-900 flex items-center"
-                disabled={isLoading.fraud}
-              >
-                <RefreshCw size={14} className={`mr-1 ${isLoading.fraud ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
+              <div>
+                <h3 className="text-xl font-semibold text-red-600">Flagged / Expired Posts</h3>
+                <p className="text-sm text-gray-600">Review expired food posts and posts flagged for misleading information.</p>
+              </div>
+              <div className="flex items-center">
+                <span className="text-xs text-gray-500 mr-2">
+                  Last updated: {lastUpdateTime.toLocaleTimeString()}
+                </span>
+                <button
+                  onClick={fetchFlaggedPosts}
+                  className="text-xs bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 rounded flex items-center"
+                  disabled={isLoading.fraud}
+                >
+                  <RefreshCw size={14} className={`mr-1 ${isLoading.fraud ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
             </div>
-            <p>Review expired food posts and posts flagged for misleading information.</p>
+            {connected && (
+              <div className="mb-4 flex items-center">
+                <span className="inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse mr-2"></span>
+                <span className="text-xs text-red-600">Real-time alerts active</span>
+              </div>
+            )}
 
             {/* Flagged Posts List */}
             {isLoading.fraud ? (
@@ -471,24 +619,41 @@ const AdminPanel = () => {
                   <li className="p-4 bg-gray-50 rounded text-center text-gray-500">No flagged posts found</li>
                 ) : (
                   flaggedPosts.map(post => (
-                    <li key={post._id} className="bg-red-50 p-4 rounded shadow">
+                    <li key={post._id} className="bg-red-50 p-4 rounded shadow relative overflow-hidden transition-all duration-300 hover:shadow-md">
+                      {post.status === 'expired' && (
+                        <div className="absolute top-0 right-0 bg-red-600 text-white text-xs px-2 py-1 rounded-bl">
+                          Expired
+                        </div>
+                      )}
+                      {post.flagReason && (
+                        <div className="absolute top-0 right-0 bg-yellow-600 text-white text-xs px-2 py-1 rounded-bl">
+                          Flagged
+                        </div>
+                      )}
                       <div className="flex justify-between items-start">
                         <div>
-                          <h4 className="font-medium">
-                            ⚠️ {post.status === 'expired' ? 'Expired Post' : 'Flagged Post'}: {post.foodType} {post.category}
+                          <h4 className="font-medium flex items-center">
+                            <AlertTriangle size={16} className="text-red-600 mr-2" />
+                            {post.foodType} {post.category}
                           </h4>
                           <div className="mt-1 text-sm">
                             <p>Quantity: {post.quantity} kg</p>
-                            <p>Posted by: {post.donorName}</p>
+                            <p>Posted by: {post.donorName || 'Unknown Donor'}</p>
                             <p className="text-red-600">
                               {post.status === 'expired'
                                 ? `Expired on ${new Date(post.expiryWindow).toLocaleDateString()}`
                                 : `Flagged for: ${post.flagReason || 'Suspicious activity'}`}
                             </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Posted: {new Date(post.createdAt).toLocaleString()}
+                            </p>
                           </div>
                         </div>
                         <div className="flex space-x-2">
-                          <button className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700">
+                          <button className="text-xs bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
                             Remove
                           </button>
                         </div>
@@ -644,7 +809,23 @@ const AdminPanel = () => {
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-green-100 p-6">
       <div className="max-w-6xl mx-auto space-y-8">
         <div className="flex justify-between items-center">
-          <h1 className="text-4xl font-bold text-green-800">Admin Dashboard</h1>
+          <div className="flex items-center">
+            <h1 className="text-4xl font-bold text-green-800">Admin Dashboard</h1>
+            {connected ? (
+              <span className="ml-4 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></span>
+                Live Data
+              </span>
+            ) : (
+              <span className="ml-4 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                <span className="inline-block w-2 h-2 bg-red-500 rounded-full mr-1"></span>
+                Offline
+              </span>
+            )}
+          </div>
+          <div className="text-sm text-gray-500">
+            Last updated: {lastUpdateTime.toLocaleTimeString()}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-4 justify-center">
